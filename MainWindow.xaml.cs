@@ -108,13 +108,24 @@ namespace stewart_platform
         {
             if (arduinoPort == null || !arduinoPort.IsOpen) return;
 
+            // Safety Check: Look for Math Errors (NaN) BEFORE creating the packet
+            for (int i = 0; i < 6; i++)
+            {
+                // If any angle is "Not a Number" (Impossible math), STOP immediately.
+                // This prevents the "Jump to 0" glitch.
+                if (double.IsNaN(platform.Alpha[i]))
+                {
+                    return;
+                }
+            }
+
             try
             {
-                // Header
+                // 1. Header
                 byte[] header = { 0x6A, 0x6A };
                 arduinoPort.Write(header, 0, 2);
 
-                // Data Packet (Integer = Degree * 100)
+                // 2. Data Packet
                 string data = "";
                 for (int i = 0; i < 6; i++)
                 {
