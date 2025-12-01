@@ -6,8 +6,8 @@ namespace stewart_platform
     public class StewartPlatform
     {
         // --- PHYSICAL CONSTANTS ---
-        private readonly double[] BASE_ANGLES = { 0, 60, 120, 180, 240, 300 };
-        private readonly double[] PLATFORM_ANGLES = { 345, 75, 105, 195, 225, 315 };
+        private readonly double[] BASE_ANGLES = { -50, -70, -170, -190, -290, -310 };
+        private readonly double[] PLATFORM_ANGLES = { -54, -66, -174, -186, -294, -306 };
 
         // Beta angles in Radians
         private readonly double[] BETA = {
@@ -16,11 +16,11 @@ namespace stewart_platform
         };
 
         // Dimensions (mm)
-        public const float BASE_RADIUS = 86f;
-        public const float PLATFORM_RADIUS = 50f;
-        public const float HORN_LENGTH = 27.845f;
-        public const float ROD_LENGTH = 110f;
-        private const float INITIAL_HEIGHT = 112.0f;
+        public const double BASE_RADIUS = 76;
+        public const double PLATFORM_RADIUS = 60;
+        public const double HORN_LENGTH = 40;
+        public const double ROD_LENGTH = 130;
+        private const double INITIAL_HEIGHT = 120.28183632;
 
         // 3D DRAWING POINTS (Public so the UI can see them)
         public Point3D[] BasePoints { get; private set; } = new Point3D[6];      // b[]
