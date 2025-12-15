@@ -116,7 +116,13 @@ namespace stewart_platform
         {
             if (arduinoPort != null && arduinoPort.IsOpen)
             {
-                try { arduinoPort.Close(); } catch { }
+                try
+                {
+                    // Unsubscribe from event before closing to prevent errors
+                    arduinoPort.DataReceived -= ArduinoPort_DataReceived;
+                    arduinoPort.Close();
+                }
+                catch { }
                 sendTimer.Stop();
                 BtnConnect.Content = "Connect";
                 TxtStatus.Text = "Disconnected";
@@ -129,6 +135,10 @@ namespace stewart_platform
                 {
                     arduinoPort = new SerialPort(PortSelector.SelectedItem.ToString(), 115200);
                     arduinoPort.Open();
+
+                    // [New] Listen for data coming BACK from Arduino
+                    arduinoPort.DataReceived += ArduinoPort_DataReceived;
+
                     sendTimer.Start();
                     BtnConnect.Content = "Disconnect";
                     TxtStatus.Text = "Connected";
@@ -222,6 +232,47 @@ namespace stewart_platform
             {
                 sendTimer.Stop();
                 MessageBox.Show("Serial Error: " + ex.Message);
+            }
+        }
+
+        private void ArduinoPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
+        {
+            if (arduinoPort == null || !arduinoPort.IsOpen) return;
+
+            try
+            {
+                
+                string line = arduinoPort.ReadLine();
+
+                if (line.StartsWith("FB:"))
+                {
+                    // Remove header and split by comma
+                    string cleanData = line.Substring(3).Trim();
+                    string[] parts = cleanData.Split(',');
+
+                    if (parts.Length == 4)
+                    {
+                        // We must use Dispatcher to update UI from a background thread
+                        Dispatcher.Invoke(() =>
+                        {
+                            // Parse values (MPU6050_light returns degrees)
+                            double roll = double.Parse(parts[0]);
+                            double pitch = double.Parse(parts[1]);
+                            double yaw = double.Parse(parts[2]);
+                            double temp = double.Parse(parts[3]);
+
+                            // Update TextBlocks
+                            TxtSensorRoll.Text = $"{roll:F1}°";
+                            TxtSensorPitch.Text = $"{pitch:F1}°";
+                            TxtSensorYaw.Text = $"{yaw:F1}°";
+                            TxtSensorTemp.Text = $"{temp:F1}°C";
+                        });
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Serial read errors can happen (timeouts, noise), usually safe to ignore in this loop
             }
         }
     }

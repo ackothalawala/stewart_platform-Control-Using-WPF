@@ -45,6 +45,39 @@
                     </StackPanel>
                 </GroupBox>
 
+                <GroupBox Header="Real-time Sensor Feedback (MPU6050)" Margin="0,0,0,10" Padding="5" BorderBrush="Blue">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" HorizontalAlignment="Center">
+                                <Label Content="Roll (X)" FontWeight="Bold"/>
+                                <TextBlock x:Name="TxtSensorRoll" Text="0.0°" FontSize="16" Foreground="Blue" HorizontalAlignment="Center"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                                <Label Content="Pitch (Y)" FontWeight="Bold"/>
+                                <TextBlock x:Name="TxtSensorPitch" Text="0.0°" FontSize="16" Foreground="Blue" HorizontalAlignment="Center"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+                                <Label Content="Yaw (Z)" FontWeight="Bold"/>
+                                <TextBlock x:Name="TxtSensorYaw" Text="0.0°" FontSize="16" Foreground="Blue" HorizontalAlignment="Center"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="3" HorizontalAlignment="Center">
+                                <Label Content="Temp" FontWeight="Bold"/>
+                                <TextBlock x:Name="TxtSensorTemp" Text="0.0°C" FontSize="16" Foreground="Red" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
+
                 <GroupBox Header="Servo Data" Padding="5">
                     <StackPanel>
                         <TextBlock x:Name="TxtServo0" Text="S0: 0.00"/>
@@ -55,6 +88,8 @@
                         <TextBlock x:Name="TxtServo5" Text="S5: 0.00"/>
                     </StackPanel>
                 </GroupBox>
+
+                
             </StackPanel>
         </ScrollViewer>
 
