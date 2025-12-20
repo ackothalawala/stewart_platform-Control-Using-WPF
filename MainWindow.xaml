@@ -37,11 +37,13 @@
                 <GroupBox Header="Rotation (Deg)" Margin="0,0,0,10" Padding="5">
                     <StackPanel>
                         <Label Content="Roll (X)"/>
-                        <Slider x:Name="SldRotX" Minimum="-30" Maximum="30" ValueChanged="Slider_ValueChanged"/>
+                        <Slider x:Name="SldRotX" Minimum="-5" Maximum="5" ValueChanged="Slider_ValueChanged"/>
+
                         <Label Content="Pitch (Y)"/>
-                        <Slider x:Name="SldRotY" Minimum="-30" Maximum="30" ValueChanged="Slider_ValueChanged"/>
+                        <Slider x:Name="SldRotY" Minimum="-5" Maximum="5" ValueChanged="Slider_ValueChanged"/>
+
                         <Label Content="Yaw (Z)"/>
-                        <Slider x:Name="SldRotZ" Minimum="-30" Maximum="30" ValueChanged="Slider_ValueChanged"/>
+                        <Slider x:Name="SldRotZ" Minimum="-5" Maximum="5" ValueChanged="Slider_ValueChanged"/>
                     </StackPanel>
                 </GroupBox>
 
@@ -96,7 +98,7 @@
         <helix:HelixViewport3D Grid.Column="1" ZoomExtentsWhenLoaded="True" Background="#333">
             <helix:SunLight/>
 
-            <helix:GridLinesVisual3D Width="200" Length="200" MajorDistance="50" MinorDistance="10" Thickness="0.5" Fill="#555"/>
+            <helix:GridLinesVisual3D Width="800" Length="800" MajorDistance="50" MinorDistance="10" Thickness="0.5" Fill="#555"/>
 
             <helix:TubeVisual3D x:Name="VisBase" Diameter="5" Fill="LightGreen"/>
 
