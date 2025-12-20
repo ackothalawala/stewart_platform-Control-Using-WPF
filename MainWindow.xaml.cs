@@ -158,31 +158,34 @@ namespace stewart_platform
 
         private void AnimateResetStep(object? sender, EventArgs e)
         {
-            double step = 1.0;
+            // 1. Define separate speeds
+            double translationStep = 0.5; 
+            double rotationStep = 0.05;   
 
-            bool MoveSliderTowardsZero(System.Windows.Controls.Slider sld)
+            // 2. Update the Helper to accept a specific step size
+            bool MoveSliderTowardsZero(System.Windows.Controls.Slider sld, double currentStep)
             {
-                if (Math.Abs(sld.Value) > 0.1)
+                if (Math.Abs(sld.Value) > currentStep)
                 {
-                    if (sld.Value > 0) sld.Value -= step;
-                    else sld.Value += step;
-
-                    if (Math.Abs(sld.Value) < step) sld.Value = 0;
-                    return false;
+                    if (sld.Value > 0) sld.Value -= currentStep;
+                    else sld.Value += currentStep;
+                    return false; 
                 }
                 else
                 {
                     sld.Value = 0;
-                    return true;
+                    return true; 
                 }
             }
 
-            bool xDone = MoveSliderTowardsZero(SldPosX);
-            bool yDone = MoveSliderTowardsZero(SldPosY);
-            bool zDone = MoveSliderTowardsZero(SldPosZ);
-            bool rxDone = MoveSliderTowardsZero(SldRotX);
-            bool ryDone = MoveSliderTowardsZero(SldRotY);
-            bool rzDone = MoveSliderTowardsZero(SldRotZ);
+            // 3. Apply the specific speeds
+            bool xDone = MoveSliderTowardsZero(SldPosX, translationStep);
+            bool yDone = MoveSliderTowardsZero(SldPosY, translationStep);
+            bool zDone = MoveSliderTowardsZero(SldPosZ, translationStep);
+
+            bool rxDone = MoveSliderTowardsZero(SldRotX, rotationStep); 
+            bool ryDone = MoveSliderTowardsZero(SldRotY, rotationStep); 
+            bool rzDone = MoveSliderTowardsZero(SldRotZ, rotationStep); 
 
             if (xDone && yDone && zDone && rxDone && ryDone && rzDone)
             {
