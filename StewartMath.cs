@@ -16,11 +16,11 @@ namespace stewart_platform
         };
 
         // Dimensions (mm)
-        public const double BASE_RADIUS = 76;
-        public const double PLATFORM_RADIUS = 60;
-        public const double HORN_LENGTH = 40;
-        public const double ROD_LENGTH = 130;
-        private const double INITIAL_HEIGHT = 120.28183632;
+        public const float BASE_RADIUS = 300f;
+        public const float PLATFORM_RADIUS = 284f;
+        public const float HORN_LENGTH = 40f;
+        public const float ROD_LENGTH = 118f;
+        private const float INITIAL_HEIGHT = 100f;
 
         // 3D DRAWING POINTS (Public so the UI can see them)
         public Point3D[] BasePoints { get; private set; } = new Point3D[6];      // b[]
