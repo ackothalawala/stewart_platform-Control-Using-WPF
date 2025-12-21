@@ -5,53 +5,63 @@ namespace stewart_platform
 {
     public class StewartPlatform
     {
-        // --- PHYSICAL CONSTANTS ---
-        private readonly double[] BASE_ANGLES = { -50, -70, -170, -190, -290, -310 };
-        private readonly double[] PLATFORM_ANGLES = { -54, -66, -174, -186, -294, -306 };
+        // Variables that hold the config values
+        private double BaseRadius;
+        private double PlatformRadius;
+        private double HornLength;
+        private double RodLength;
+        private double InitialHeight;
 
-        // Beta angles in Radians
-        private readonly double[] BETA = {
-            Math.PI / 6, -5 * Math.PI / 6, -Math.PI / 2,
-            Math.PI / 2, 5 * Math.PI / 6, -Math.PI / 6
-        };
+        private double[] BaseAngles;
+        private double[] PlatformAngles;
+        private double[] Beta;
 
-        // Dimensions (mm)
-        public const float BASE_RADIUS = 300f;
-        public const float PLATFORM_RADIUS = 284f;
-        public const float HORN_LENGTH = 40f;
-        public const float ROD_LENGTH = 118f;
-        private const float INITIAL_HEIGHT = 100f;
-
-        // 3D DRAWING POINTS (Public so the UI can see them)
-        public Point3D[] BasePoints { get; private set; } = new Point3D[6];      // b[]
-        public Point3D[] PlatformPoints { get; private set; } = new Point3D[6];  // q[] (The top joints)
-        public Point3D[] HornEndPoints { get; private set; } = new Point3D[6];   // a[] (The servo arm ends)
+        // 3D Drawing Points (Public for UI)
+        public Point3D[] BasePoints { get; private set; } = new Point3D[6];
+        public Point3D[] PlatformPoints { get; private set; } = new Point3D[6];
+        public Point3D[] HornEndPoints { get; private set; } = new Point3D[6];
 
         // Internal Math Vectors
         private Vector3D[] b = new Vector3D[6];
         private Vector3D[] p = new Vector3D[6];
-
-        // Servo Angles
         public double[] Alpha { get; private set; } = new double[6];
 
         // Current State
         private Vector3D Translation;
         private Vector3D Rotation;
 
-        public StewartPlatform()
+        // CONSTRUCTOR: Now accepts the Config object
+        public StewartPlatform(RobotConfig config)
         {
-            // Initialize Geometry
+            // 1. Load Dimensions from Config
+            this.BaseRadius = config.BaseRadius;
+            this.PlatformRadius = config.PlatformRadius;
+            this.HornLength = config.HornLength;
+            this.RodLength = config.RodLength;
+            this.InitialHeight = config.InitialHeight;
+
+            // 2. Load Angles from Config
+            this.BaseAngles = config.BaseAngles;
+            this.PlatformAngles = config.PlatformAngles;
+            this.Beta = config.BetaAngles;
+
+            // 3. Initialize Geometry
+            InitializePlatform();
+        }
+
+        private void InitializePlatform()
+        {
             for (int i = 0; i < 6; i++)
             {
-                // Calculate Base Points (b)
-                double xb = BASE_RADIUS * Math.Cos(ToRadians(BASE_ANGLES[i]));
-                double yb = BASE_RADIUS * Math.Sin(ToRadians(BASE_ANGLES[i]));
+                // Calculate Base Points (b) using Configured Angles
+                double xb = BaseRadius * Math.Cos(ToRadians(BaseAngles[i]));
+                double yb = BaseRadius * Math.Sin(ToRadians(BaseAngles[i]));
                 b[i] = new Vector3D(xb, yb, 0);
-                BasePoints[i] = new Point3D(xb, yb, 0); // Store for drawing
+                BasePoints[i] = new Point3D(xb, yb, 0);
 
-                // Calculate Platform Points (p)
-                double px = PLATFORM_RADIUS * Math.Cos(ToRadians(PLATFORM_ANGLES[i]));
-                double py = PLATFORM_RADIUS * Math.Sin(ToRadians(PLATFORM_ANGLES[i]));
+                // Calculate Platform Points (p) using Configured Angles
+                double px = PlatformRadius * Math.Cos(ToRadians(PlatformAngles[i]));
+                double py = PlatformRadius * Math.Sin(ToRadians(PlatformAngles[i]));
                 p[i] = new Vector3D(px, py, 0);
             }
         }
@@ -65,7 +75,7 @@ namespace stewart_platform
 
         private void CalculateAngles()
         {
-            Vector3D h0 = new Vector3D(0, 0, INITIAL_HEIGHT);
+            Vector3D h0 = new Vector3D(0, 0, InitialHeight);
 
             for (int i = 0; i < 6; i++)
             {
@@ -88,9 +98,10 @@ namespace stewart_platform
                 Vector3D l = q - b[i];
 
                 // 3. Inverse Kinematics
-                double L = l.LengthSquared - (ROD_LENGTH * ROD_LENGTH) + (HORN_LENGTH * HORN_LENGTH);
-                double M = 2 * HORN_LENGTH * (q.Z - b[i].Z);
-                double N = 2 * HORN_LENGTH * (Math.Cos(BETA[i]) * (q.X - b[i].X) + Math.Sin(BETA[i]) * (q.Y - b[i].Y));
+                double L = l.LengthSquared - (RodLength * RodLength) + (HornLength * HornLength);
+                double M = 2 * HornLength * (q.Z - b[i].Z);
+                // Note: Using Beta[i] from config
+                double N = 2 * HornLength * (Math.Cos(Beta[i]) * (q.X - b[i].X) + Math.Sin(Beta[i]) * (q.Y - b[i].Y));
 
                 double val = L / Math.Sqrt(M * M + N * N);
                 if (val < -1) val = -1;
@@ -98,10 +109,10 @@ namespace stewart_platform
 
                 Alpha[i] = Math.Asin(val) - Math.Atan2(N, M);
 
-                // 4. Calculate 'a' point (Horn End) for Drawing [Matches Processing source: 79]
-                double ax = HORN_LENGTH * Math.Cos(Alpha[i]) * Math.Cos(BETA[i]) + b[i].X;
-                double ay = HORN_LENGTH * Math.Cos(Alpha[i]) * Math.Sin(BETA[i]) + b[i].Y;
-                double az = HORN_LENGTH * Math.Sin(Alpha[i]) + b[i].Z;
+                // 4. Calculate 'a' point (Horn End) for Drawing
+                double ax = HornLength * Math.Cos(Alpha[i]) * Math.Cos(Beta[i]) + b[i].X;
+                double ay = HornLength * Math.Cos(Alpha[i]) * Math.Sin(Beta[i]) + b[i].Y;
+                double az = HornLength * Math.Sin(Alpha[i]) + b[i].Z;
 
                 HornEndPoints[i] = new Point3D(ax, ay, az);
             }

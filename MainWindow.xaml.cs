@@ -1,24 +1,26 @@
 ﻿using System;
-using System.Collections.Generic; // For Lists
+using System.Collections.Generic;
 using System.IO.Ports;
 using System.Windows;
-using System.Windows.Media.Media3D; // For Point3D
+using System.Windows.Controls; // For Slider
+using System.Windows.Media.Media3D;
 using System.Windows.Threading;
-using HelixToolkit.Wpf; // For 3D Visuals
+using HelixToolkit.Wpf;
 
 namespace stewart_platform
 {
     public partial class MainWindow : Window
     {
-        // 1. The Physics Engine
-        StewartPlatform platform = new StewartPlatform();
+        // 1. Configuration & Engine
+        RobotConfig config = new RobotConfig(); // Loads the settings
+        StewartPlatform platform;
 
         // 2. Hardware Comms
         SerialPort? arduinoPort;
         DispatcherTimer sendTimer;
         DispatcherTimer resetAnimationTimer;
 
-        // 3. Lists to hold our 3D Objects (Makes code cleaner)
+        // 3. Visual Lists
         List<TubeVisual3D> hornVisuals = new List<TubeVisual3D>();
         List<TubeVisual3D> rodVisuals = new List<TubeVisual3D>();
 
@@ -26,8 +28,14 @@ namespace stewart_platform
         {
             InitializeComponent();
 
-            // --- SETUP 3D VISUAL LISTS ---
-            // We put the XAML objects into lists so we can loop through them
+            // --- A. INITIALIZE MATH WITH CONFIG ---
+            platform = new StewartPlatform(config);
+
+            // --- B. SETUP UI LIMITS FROM CONFIG ---
+            // This ensures sliders match the config limits automatically
+            SetupSliders();
+
+            // --- C. SETUP 3D VISUALS ---
             hornVisuals.Add(VisHorn0); hornVisuals.Add(VisHorn1);
             hornVisuals.Add(VisHorn2); hornVisuals.Add(VisHorn3);
             hornVisuals.Add(VisHorn4); hornVisuals.Add(VisHorn5);
@@ -38,7 +46,7 @@ namespace stewart_platform
 
             LoadAvailablePorts();
 
-            // Setup Timers
+            // --- D. TIMERS ---
             sendTimer = new DispatcherTimer();
             sendTimer.Interval = TimeSpan.FromMilliseconds(40);
             sendTimer.Tick += SendDataToArduino;
@@ -47,9 +55,21 @@ namespace stewart_platform
             resetAnimationTimer.Interval = TimeSpan.FromMilliseconds(20);
             resetAnimationTimer.Tick += AnimateResetStep;
 
-            // Initial Draw (Robot starts at Home Position)
+            // Initial Draw
             platform.ApplyTranslationAndRotation(0, 0, 0, 0, 0, 0);
             Update3DVisualization();
+        }
+
+        private void SetupSliders()
+        {
+            // Apply limits from RobotConfig to the sliders
+            SldPosX.Minimum = -config.MaxTranslation; SldPosX.Maximum = config.MaxTranslation;
+            SldPosY.Minimum = -config.MaxTranslation; SldPosY.Maximum = config.MaxTranslation;
+            SldPosZ.Minimum = -config.MaxTranslation; SldPosZ.Maximum = config.MaxTranslation;
+
+            SldRotX.Minimum = -config.MaxRotation; SldRotX.Maximum = config.MaxRotation;
+            SldRotY.Minimum = -config.MaxRotation; SldRotY.Maximum = config.MaxRotation;
+            SldRotZ.Minimum = -config.MaxRotation; SldRotZ.Maximum = config.MaxRotation;
         }
 
         private void LoadAvailablePorts()
@@ -64,7 +84,7 @@ namespace stewart_platform
         {
             if (platform == null) return;
 
-            // 1. Calculate Physics
+            // Convert UI degrees to radians for math
             double rx = SldRotX.Value * (Math.PI / 180.0);
             double ry = SldRotY.Value * (Math.PI / 180.0);
             double rz = SldRotZ.Value * (Math.PI / 180.0);
@@ -74,36 +94,33 @@ namespace stewart_platform
                 rx, ry, rz
             );
 
-            // 2. Update the Screen
             UpdateUI();
             Update3DVisualization();
         }
 
-        // --- 3D VISUALIZATION ENGINE ---
+        // --- 3D VISUALIZATION ---
         private void Update3DVisualization()
         {
-            // 1. Draw Base (Hexagon Loop)
+            // 1. Draw Base
             var basePath = new Point3DCollection();
             foreach (var p in platform.BasePoints) basePath.Add(p);
-            basePath.Add(platform.BasePoints[0]); // Close the loop
+            basePath.Add(platform.BasePoints[0]);
             VisBase.Path = basePath;
 
-            // 2. Draw Platform (Hexagon Loop)
+            // 2. Draw Platform
             var platPath = new Point3DCollection();
             foreach (var p in platform.PlatformPoints) platPath.Add(p);
-            platPath.Add(platform.PlatformPoints[0]); // Close the loop
+            platPath.Add(platform.PlatformPoints[0]);
             VisPlatform.Path = platPath;
 
             // 3. Draw Legs
             for (int i = 0; i < 6; i++)
             {
-                // Horn: Base -> Horn End
                 var hornPath = new Point3DCollection();
                 hornPath.Add(platform.BasePoints[i]);
                 hornPath.Add(platform.HornEndPoints[i]);
                 hornVisuals[i].Path = hornPath;
 
-                // Rod: Horn End -> Platform
                 var rodPath = new Point3DCollection();
                 rodPath.Add(platform.HornEndPoints[i]);
                 rodPath.Add(platform.PlatformPoints[i]);
@@ -111,14 +128,13 @@ namespace stewart_platform
             }
         }
 
-        // --- BUTTONS & ANIMATION ---
+        // --- BUTTONS ---
         private void BtnConnect_Click(object sender, RoutedEventArgs e)
         {
             if (arduinoPort != null && arduinoPort.IsOpen)
             {
                 try
                 {
-                    // Unsubscribe from event before closing to prevent errors
                     arduinoPort.DataReceived -= ArduinoPort_DataReceived;
                     arduinoPort.Close();
                 }
@@ -133,10 +149,9 @@ namespace stewart_platform
                 if (PortSelector.SelectedItem == null) return;
                 try
                 {
-                    arduinoPort = new SerialPort(PortSelector.SelectedItem.ToString(), 115200);
+                    // Use BaudRate from Config
+                    arduinoPort = new SerialPort(PortSelector.SelectedItem.ToString(), config.BaudRate);
                     arduinoPort.Open();
-
-                    // [New] Listen for data coming BACK from Arduino
                     arduinoPort.DataReceived += ArduinoPort_DataReceived;
 
                     sendTimer.Start();
@@ -158,58 +173,42 @@ namespace stewart_platform
 
         private void AnimateResetStep(object? sender, EventArgs e)
         {
-            // 1. Define separate speeds
-            double translationStep = 0.5; 
-            double rotationStep = 0.05;   
+            double translationStep = 0.5;
+            double rotationStep = 0.05;
 
-            // 2. Update the Helper to accept a specific step size
-            bool MoveSliderTowardsZero(System.Windows.Controls.Slider sld, double currentStep)
+            bool MoveTowardsZero(Slider sld, double step)
             {
-                if (Math.Abs(sld.Value) > currentStep)
+                if (Math.Abs(sld.Value) > step)
                 {
-                    if (sld.Value > 0) sld.Value -= currentStep;
-                    else sld.Value += currentStep;
-                    return false; 
+                    if (sld.Value > 0) sld.Value -= step;
+                    else sld.Value += step;
+                    return false;
                 }
                 else
                 {
                     sld.Value = 0;
-                    return true; 
+                    return true;
                 }
             }
 
-            // 3. Apply the specific speeds
-            bool xDone = MoveSliderTowardsZero(SldPosX, translationStep);
-            bool yDone = MoveSliderTowardsZero(SldPosY, translationStep);
-            bool zDone = MoveSliderTowardsZero(SldPosZ, translationStep);
+            bool x = MoveTowardsZero(SldPosX, translationStep);
+            bool y = MoveTowardsZero(SldPosY, translationStep);
+            bool z = MoveTowardsZero(SldPosZ, translationStep);
+            bool rx = MoveTowardsZero(SldRotX, rotationStep);
+            bool ry = MoveTowardsZero(SldRotY, rotationStep);
+            bool rz = MoveTowardsZero(SldRotZ, rotationStep);
 
-            bool rxDone = MoveSliderTowardsZero(SldRotX, rotationStep); 
-            bool ryDone = MoveSliderTowardsZero(SldRotY, rotationStep); 
-            bool rzDone = MoveSliderTowardsZero(SldRotZ, rotationStep); 
-
-            if (xDone && yDone && zDone && rxDone && ryDone && rzDone)
+            if (x && y && z && rx && ry && rz)
             {
                 resetAnimationTimer.Stop();
             }
         }
 
-        // --- UI TEXT UPDATES ---
-        private void UpdateUI()
-        {
-            TxtServo0.Text = $"Servo 0: {platform.GetAlphaDegree(0):F2}°";
-            TxtServo1.Text = $"Servo 1: {platform.GetAlphaDegree(1):F2}°";
-            TxtServo2.Text = $"Servo 2: {platform.GetAlphaDegree(2):F2}°";
-            TxtServo3.Text = $"Servo 3: {platform.GetAlphaDegree(3):F2}°";
-            TxtServo4.Text = $"Servo 4: {platform.GetAlphaDegree(4):F2}°";
-            TxtServo5.Text = $"Servo 5: {platform.GetAlphaDegree(5):F2}°";
-        }
-
-        // --- SERIAL SENDING ---
+        // --- SERIAL COMMUNICATION ---
         private void SendDataToArduino(object? sender, EventArgs e)
         {
             if (arduinoPort == null || !arduinoPort.IsOpen) return;
 
-            // Safety Check for NaN
             for (int i = 0; i < 6; i++)
             {
                 if (double.IsNaN(platform.Alpha[i])) return;
@@ -228,55 +227,45 @@ namespace stewart_platform
                     if (i < 5) data += ",";
                 }
                 data += "\n";
-
                 arduinoPort.Write(data);
             }
-            catch (Exception ex)
-            {
-                sendTimer.Stop();
-                MessageBox.Show("Serial Error: " + ex.Message);
-            }
+            catch (Exception) { sendTimer.Stop(); }
         }
 
         private void ArduinoPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
         {
             if (arduinoPort == null || !arduinoPort.IsOpen) return;
-
             try
             {
-                
                 string line = arduinoPort.ReadLine();
-
                 if (line.StartsWith("FB:"))
                 {
-                    // Remove header and split by comma
                     string cleanData = line.Substring(3).Trim();
                     string[] parts = cleanData.Split(',');
 
                     if (parts.Length == 4)
                     {
-                        // We must use Dispatcher to update UI from a background thread
                         Dispatcher.Invoke(() =>
                         {
-                            // Parse values (MPU6050_light returns degrees)
-                            double roll = double.Parse(parts[0]);
-                            double pitch = double.Parse(parts[1]);
-                            double yaw = double.Parse(parts[2]);
-                            double temp = double.Parse(parts[3]);
-
-                            // Update TextBlocks
-                            TxtSensorRoll.Text = $"{roll:F1}°";
-                            TxtSensorPitch.Text = $"{pitch:F1}°";
-                            TxtSensorYaw.Text = $"{yaw:F1}°";
-                            TxtSensorTemp.Text = $"{temp:F1}°C";
+                            if (double.TryParse(parts[0], out double roll)) TxtSensorRoll.Text = $"{roll:F1}°";
+                            if (double.TryParse(parts[1], out double pitch)) TxtSensorPitch.Text = $"{pitch:F1}°";
+                            if (double.TryParse(parts[2], out double yaw)) TxtSensorYaw.Text = $"{yaw:F1}°";
+                            if (double.TryParse(parts[3], out double temp)) TxtSensorTemp.Text = $"{temp:F1}°C";
                         });
                     }
                 }
             }
-            catch (Exception)
-            {
-                // Serial read errors can happen (timeouts, noise), usually safe to ignore in this loop
-            }
+            catch { }
+        }
+
+        private void UpdateUI()
+        {
+            TxtServo0.Text = $"Servo 0: {platform.GetAlphaDegree(0):F2}°";
+            TxtServo1.Text = $"Servo 1: {platform.GetAlphaDegree(1):F2}°";
+            TxtServo2.Text = $"Servo 2: {platform.GetAlphaDegree(2):F2}°";
+            TxtServo3.Text = $"Servo 3: {platform.GetAlphaDegree(3):F2}°";
+            TxtServo4.Text = $"Servo 4: {platform.GetAlphaDegree(4):F2}°";
+            TxtServo5.Text = $"Servo 5: {platform.GetAlphaDegree(5):F2}°";
         }
     }
 }
