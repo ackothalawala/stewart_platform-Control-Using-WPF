@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.IO.Ports;
 using System.Windows;
-using System.Windows.Controls; // For Slider
+using System.Windows.Controls;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using HelixToolkit.Wpf;
@@ -12,15 +12,19 @@ namespace stewart_platform
     public partial class MainWindow : Window
     {
         // 1. Configuration & Engine
-        RobotConfig config = new RobotConfig(); // Loads the settings
+        RobotConfig config = new RobotConfig();
         StewartPlatform platform;
 
         // 2. Hardware Comms
         SerialPort? arduinoPort;
         DispatcherTimer sendTimer;
-        DispatcherTimer resetAnimationTimer;
 
-        // 3. Visual Lists
+        // 3. Smooth Movement Engine
+        DispatcherTimer movementTimer;
+        private double[] targetValues = new double[6]; // X, Y, Z, Rx, Ry, Rz
+        private bool isInternalUpdate = false;
+
+        // 4. Visual Lists
         List<TubeVisual3D> hornVisuals = new List<TubeVisual3D>();
         List<TubeVisual3D> rodVisuals = new List<TubeVisual3D>();
 
@@ -28,14 +32,10 @@ namespace stewart_platform
         {
             InitializeComponent();
 
-            // --- A. INITIALIZE MATH WITH CONFIG ---
             platform = new StewartPlatform(config);
 
-            // --- B. SETUP UI LIMITS FROM CONFIG ---
-            // This ensures sliders match the config limits automatically
             SetupSliders();
 
-            // --- C. SETUP 3D VISUALS ---
             hornVisuals.Add(VisHorn0); hornVisuals.Add(VisHorn1);
             hornVisuals.Add(VisHorn2); hornVisuals.Add(VisHorn3);
             hornVisuals.Add(VisHorn4); hornVisuals.Add(VisHorn5);
@@ -46,23 +46,20 @@ namespace stewart_platform
 
             LoadAvailablePorts();
 
-            // --- D. TIMERS ---
             sendTimer = new DispatcherTimer();
             sendTimer.Interval = TimeSpan.FromMilliseconds(40);
             sendTimer.Tick += SendDataToArduino;
 
-            resetAnimationTimer = new DispatcherTimer();
-            resetAnimationTimer.Interval = TimeSpan.FromMilliseconds(20);
-            resetAnimationTimer.Tick += AnimateResetStep;
+            movementTimer = new DispatcherTimer();
+            movementTimer.Interval = TimeSpan.FromMilliseconds(20);
+            movementTimer.Tick += MovementTimer_Tick;
 
-            // Initial Draw
             platform.ApplyTranslationAndRotation(0, 0, 0, 0, 0, 0);
             Update3DVisualization();
         }
 
         private void SetupSliders()
         {
-            // Apply limits from RobotConfig to the sliders
             SldPosX.Minimum = -config.MaxTranslation; SldPosX.Maximum = config.MaxTranslation;
             SldPosY.Minimum = -config.MaxTranslation; SldPosY.Maximum = config.MaxTranslation;
             SldPosZ.Minimum = -config.MaxTranslation; SldPosZ.Maximum = config.MaxTranslation;
@@ -79,12 +76,28 @@ namespace stewart_platform
             if (ports.Length > 0) PortSelector.SelectedIndex = 0;
         }
 
-        // --- CORE CONTROL ---
         private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (platform == null) return;
 
-            // Convert UI degrees to radians for math
+            if (InpPosX != null) InpPosX.Text = SldPosX.Value.ToString("F1");
+            if (InpPosY != null) InpPosY.Text = SldPosY.Value.ToString("F1");
+            if (InpPosZ != null) InpPosZ.Text = SldPosZ.Value.ToString("F1");
+
+            if (InpRotX != null) InpRotX.Text = SldRotX.Value.ToString("F1");
+            if (InpRotY != null) InpRotY.Text = SldRotY.Value.ToString("F1");
+            if (InpRotZ != null) InpRotZ.Text = SldRotZ.Value.ToString("F1");
+
+            if (!isInternalUpdate)
+            {
+                targetValues[0] = SldPosX.Value;
+                targetValues[1] = SldPosY.Value;
+                targetValues[2] = SldPosZ.Value;
+                targetValues[3] = SldRotX.Value;
+                targetValues[4] = SldRotY.Value;
+                targetValues[5] = SldRotZ.Value;
+            }
+
             double rx = SldRotX.Value * (Math.PI / 180.0);
             double ry = SldRotY.Value * (Math.PI / 180.0);
             double rz = SldRotZ.Value * (Math.PI / 180.0);
@@ -98,37 +111,78 @@ namespace stewart_platform
             Update3DVisualization();
         }
 
-        // --- 3D VISUALIZATION ---
-        private void Update3DVisualization()
+        private void MovementTimer_Tick(object? sender, EventArgs e)
         {
-            // 1. Draw Base
-            var basePath = new Point3DCollection();
-            foreach (var p in platform.BasePoints) basePath.Add(p);
-            basePath.Add(platform.BasePoints[0]);
-            VisBase.Path = basePath;
+            isInternalUpdate = true;
 
-            // 2. Draw Platform
-            var platPath = new Point3DCollection();
-            foreach (var p in platform.PlatformPoints) platPath.Add(p);
-            platPath.Add(platform.PlatformPoints[0]);
-            VisPlatform.Path = platPath;
+            bool doneX = MoveAxisTowards(SldPosX, 0, 0.5);
+            bool doneY = MoveAxisTowards(SldPosY, 1, 0.5);
+            bool doneZ = MoveAxisTowards(SldPosZ, 2, 0.5);
 
-            // 3. Draw Legs
-            for (int i = 0; i < 6; i++)
+            bool doneRx = MoveAxisTowards(SldRotX, 3, 0.1);
+            bool doneRy = MoveAxisTowards(SldRotY, 4, 0.1);
+            bool doneRz = MoveAxisTowards(SldRotZ, 5, 0.1);
+
+            isInternalUpdate = false;
+
+            if (doneX && doneY && doneZ && doneRx && doneRy && doneRz)
             {
-                var hornPath = new Point3DCollection();
-                hornPath.Add(platform.BasePoints[i]);
-                hornPath.Add(platform.HornEndPoints[i]);
-                hornVisuals[i].Path = hornPath;
-
-                var rodPath = new Point3DCollection();
-                rodPath.Add(platform.HornEndPoints[i]);
-                rodPath.Add(platform.PlatformPoints[i]);
-                rodVisuals[i].Path = rodPath;
+                movementTimer.Stop();
             }
         }
 
-        // --- BUTTONS ---
+        private bool MoveAxisTowards(Slider sld, int targetIndex, double step)
+        {
+            double current = sld.Value;
+            double target = targetValues[targetIndex];
+            double diff = target - current;
+
+            if (Math.Abs(diff) > step)
+            {
+                sld.Value += Math.Sign(diff) * step;
+                return false;
+            }
+            else
+            {
+                sld.Value = target;
+                return true;
+            }
+        }
+
+        private void BtnSetPos_Click(object sender, RoutedEventArgs e)
+        {
+            // [FIX] Added null check (?? "") to prevent warning
+            string axis = ((Button)sender).Tag?.ToString() ?? "";
+            try
+            {
+                if (axis == "X") targetValues[0] = double.Parse(InpPosX.Text);
+                if (axis == "Y") targetValues[1] = double.Parse(InpPosY.Text);
+                if (axis == "Z") targetValues[2] = double.Parse(InpPosZ.Text);
+                movementTimer.Start();
+            }
+            catch { MessageBox.Show("Invalid Number"); }
+        }
+
+        private void BtnSetRot_Click(object sender, RoutedEventArgs e)
+        {
+            // [FIX] Added null check
+            string axis = ((Button)sender).Tag?.ToString() ?? "";
+            try
+            {
+                if (axis == "X") targetValues[3] = double.Parse(InpRotX.Text);
+                if (axis == "Y") targetValues[4] = double.Parse(InpRotY.Text);
+                if (axis == "Z") targetValues[5] = double.Parse(InpRotZ.Text);
+                movementTimer.Start();
+            }
+            catch { MessageBox.Show("Invalid Number"); }
+        }
+
+        private void BtnReset_Click(object sender, RoutedEventArgs e)
+        {
+            for (int i = 0; i < 6; i++) targetValues[i] = 0;
+            movementTimer.Start();
+        }
+
         private void BtnConnect_Click(object sender, RoutedEventArgs e)
         {
             if (arduinoPort != null && arduinoPort.IsOpen)
@@ -149,8 +203,10 @@ namespace stewart_platform
                 if (PortSelector.SelectedItem == null) return;
                 try
                 {
-                    // Use BaudRate from Config
-                    arduinoPort = new SerialPort(PortSelector.SelectedItem.ToString(), config.BaudRate);
+                    // [FIX] Added null check for SelectedItem
+                    string portName = PortSelector.SelectedItem?.ToString() ?? "COM1";
+
+                    arduinoPort = new SerialPort(portName, config.BaudRate);
                     arduinoPort.Open();
                     arduinoPort.DataReceived += ArduinoPort_DataReceived;
 
@@ -166,53 +222,36 @@ namespace stewart_platform
             }
         }
 
-        private void BtnReset_Click(object sender, RoutedEventArgs e)
+        private void Update3DVisualization()
         {
-            resetAnimationTimer.Start();
-        }
+            var basePath = new Point3DCollection();
+            foreach (var p in platform.BasePoints) basePath.Add(p);
+            basePath.Add(platform.BasePoints[0]);
+            VisBase.Path = basePath;
 
-        private void AnimateResetStep(object? sender, EventArgs e)
-        {
-            double translationStep = 0.5;
-            double rotationStep = 0.05;
-
-            bool MoveTowardsZero(Slider sld, double step)
-            {
-                if (Math.Abs(sld.Value) > step)
-                {
-                    if (sld.Value > 0) sld.Value -= step;
-                    else sld.Value += step;
-                    return false;
-                }
-                else
-                {
-                    sld.Value = 0;
-                    return true;
-                }
-            }
-
-            bool x = MoveTowardsZero(SldPosX, translationStep);
-            bool y = MoveTowardsZero(SldPosY, translationStep);
-            bool z = MoveTowardsZero(SldPosZ, translationStep);
-            bool rx = MoveTowardsZero(SldRotX, rotationStep);
-            bool ry = MoveTowardsZero(SldRotY, rotationStep);
-            bool rz = MoveTowardsZero(SldRotZ, rotationStep);
-
-            if (x && y && z && rx && ry && rz)
-            {
-                resetAnimationTimer.Stop();
-            }
-        }
-
-        // --- SERIAL COMMUNICATION ---
-        private void SendDataToArduino(object? sender, EventArgs e)
-        {
-            if (arduinoPort == null || !arduinoPort.IsOpen) return;
+            var platPath = new Point3DCollection();
+            foreach (var p in platform.PlatformPoints) platPath.Add(p);
+            platPath.Add(platform.PlatformPoints[0]);
+            VisPlatform.Path = platPath;
 
             for (int i = 0; i < 6; i++)
             {
-                if (double.IsNaN(platform.Alpha[i])) return;
+                var hornPath = new Point3DCollection();
+                hornPath.Add(platform.BasePoints[i]);
+                hornPath.Add(platform.HornEndPoints[i]);
+                hornVisuals[i].Path = hornPath;
+
+                var rodPath = new Point3DCollection();
+                rodPath.Add(platform.HornEndPoints[i]);
+                rodPath.Add(platform.PlatformPoints[i]);
+                rodVisuals[i].Path = rodPath;
             }
+        }
+
+        private void SendDataToArduino(object? sender, EventArgs e)
+        {
+            if (arduinoPort == null || !arduinoPort.IsOpen) return;
+            for (int i = 0; i < 6; i++) if (double.IsNaN(platform.Alpha[i])) return;
 
             try
             {
@@ -237,8 +276,10 @@ namespace stewart_platform
             if (arduinoPort == null || !arduinoPort.IsOpen) return;
             try
             {
-                string line = arduinoPort.ReadLine();
-                if (line.StartsWith("FB:"))
+                // [FIX] Handled nullable string explicitly
+                string? line = arduinoPort.ReadLine();
+
+                if (!string.IsNullOrEmpty(line) && line.StartsWith("FB:"))
                 {
                     string cleanData = line.Substring(3).Trim();
                     string[] parts = cleanData.Split(',');
