@@ -5,7 +5,7 @@
         //  Physical Dimensions (mm) 
         public double BaseRadius { get; set; } = 300.0;
         public double PlatformRadius { get; set; } = 284.0;
-        public double HornLength { get; set; } = 40.0;
+        public double HornLength { get; set; } = 44.0;
         public double RodLength { get; set; } = 118.0;
         public double InitialHeight { get; set; } = 100.0;
 
