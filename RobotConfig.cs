@@ -3,16 +3,16 @@
     public class RobotConfig
     {
         //   Dimensions of Robot (mm) 
-        public double BaseRadius { get; set; } = 300.0;
-        public double PlatformRadius { get; set; } = 294.6;
-        public double HornLength { get; set; } = 45.0;
-        public double RodLength { get; set; } = 120.0;
-        public double InitialHeight { get; set; } = 100.0;
+        public double BaseRadius { get; set; } = 86.0;
+        public double PlatformRadius { get; set; } = 50.0;
+        public double HornLength { get; set; } = 36.845;
+        public double RodLength { get; set; } = 144.0;
+        public double InitialHeight { get; set; } = 135.0;
 
         // Base servo and Platform uJ Angles in degrees 
 
-        public double[] BaseAngles { get; set; } = { -50.0, -70.0, -170.0, -190.0, -290.0, -310.0 };
-        public double[] PlatformAngles { get; set; } = { -54.0, -66.0, -174.0, -186.0, -294.0, -306.0 };
+        public double[] BaseAngles { get; set; } = { -0.0,-60.0, -120.0, -180.0, -240.0, -300.0 };
+        public double[] PlatformAngles { get; set; } = { -75.0, -105.0, -195.0, -225.0, -315.0, -345.0 };
 
         //Beta Angles in radians
         public double[] BetaAngles { get; set; } = {
