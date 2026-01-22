@@ -4,7 +4,7 @@
     {
         //   Dimensions of Robot (mm) 
         public double BaseRadius { get; set; } = 86.0;
-        public double PlatformRadius { get; set; } = 50.0;
+        public double PlatformRadius { get; set; } = 70.0;
         public double HornLength { get; set; } = 36.845;
         public double RodLength { get; set; } = 144.0;
         public double InitialHeight { get; set; } = 135.0;
@@ -12,17 +12,17 @@
         // Base servo and Platform uJ Angles in degrees 
 
         public double[] BaseAngles { get; set; } = { -0.0,-60.0, -120.0, -180.0, -240.0, -300.0 };
-        public double[] PlatformAngles { get; set; } = { -75.0, -105.0, -195.0, -225.0, -315.0, -345.0 };
+        public double[] PlatformAngles { get; set; } = { -0.0,-60.0, -120.0, -180.0, -240.0, -300.0};
 
         //Beta Angles in radians
         public double[] BetaAngles { get; set; } = {
-            Math.PI / 6,      // 30 deg
-            -5 * Math.PI / 6, // -150 deg
-            -Math.PI / 2,     // -90 deg
-            Math.PI / 2,      // 90 deg
-            5 * Math.PI / 6,  // 150 deg
-            -Math.PI / 6      // -30 deg
-        };
+    0.0,              // 0°    servo 0 (at 0°)
+    -Math.PI / 3,     // -60°  servo 1 (at -60°)
+    -2 * Math.PI / 3, // -120° servo 2 (at -120°)
+    Math.PI,          // 180°  servo 3 (at -180°)
+    2 * Math.PI / 3,  // 120°  servo 4 (at -240°)
+    Math.PI / 3       // 60°   servo 5 (at -300°)
+};
 
         // limits for translation and rotation 
         public double MaxTranslation { get; set; } = 35.0; //(mm)
