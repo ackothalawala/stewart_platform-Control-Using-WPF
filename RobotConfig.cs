@@ -12,17 +12,17 @@
         // Base servo and Platform uJ Angles in degrees 
 
         public double[] BaseAngles { get; set; } = { -0.0,-60.0, -120.0, -180.0, -240.0, -300.0 };
-        public double[] PlatformAngles { get; set; } = { -0.0,-60.0, -120.0, -180.0, -240.0, -300.0};
+        public double[] PlatformAngles { get; set; } = { -45, -75, -165, -195, -185, -315 };
 
         //Beta Angles in radians
         public double[] BetaAngles { get; set; } = {
-    0.0,              // 0°    servo 0 (at 0°)
-    -Math.PI / 3,     // -60°  servo 1 (at -60°)
-    -2 * Math.PI / 3, // -120° servo 2 (at -120°)
-    Math.PI,          // 180°  servo 3 (at -180°)
-    2 * Math.PI / 3,  // 120°  servo 4 (at -240°)
-    Math.PI / 3       // 60°   servo 5 (at -300°)
-};
+                0.0,              // 0°    servo 0 (at 0°)
+                -Math.PI / 3,     // -60°  servo 1 (at -60°)
+                -2 * Math.PI / 3, // -120° servo 2 (at -120°)
+                Math.PI,          // 180°  servo 3 (at -180°)
+                2 * Math.PI / 3,  // 120°  servo 4 (at -240°)
+                Math.PI / 3       // 60°   servo 5 (at -300°)
+         };
 
         // limits for translation and rotation 
         public double MaxTranslation { get; set; } = 35.0; //(mm)
