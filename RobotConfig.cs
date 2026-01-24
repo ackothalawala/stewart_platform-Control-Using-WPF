@@ -12,7 +12,7 @@
         // Base servo and Platform uJ Angles in degrees 
 
         public double[] BaseAngles { get; set; } = { -0.0,-60.0, -120.0, -180.0, -240.0, -300.0 };
-        public double[] PlatformAngles { get; set; } = { -45, -75, -165,-195,-285, -315 };
+        public double[] PlatformAngles { get; set; } = { -0.0,-60.0, -120.0, -180.0, -240.0, -300.0  };
 
         //Beta Angles in radians
         public double[] BetaAngles { get; set; } = {

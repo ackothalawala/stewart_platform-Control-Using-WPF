@@ -100,7 +100,6 @@ namespace stewart_platform
                 // 3. Inverse Kinematics
                 double L = l.LengthSquared - (RodLength * RodLength) + (HornLength * HornLength);
                 double M = 2 * HornLength * (q.Z - b[i].Z);
-                // Note: Using Beta[i] from config
                 double N = 2 * HornLength * (Math.Cos(Beta[i]) * (q.X - b[i].X) + Math.Sin(Beta[i]) * (q.Y - b[i].Y));
 
                 double val = L / Math.Sqrt(M * M + N * N);
@@ -109,10 +108,21 @@ namespace stewart_platform
 
                 Alpha[i] = Math.Asin(val) - Math.Atan2(N, M);
 
-                // 4. Calculate 'a' point (Horn End) for Drawing
-                double ax = HornLength * Math.Cos(Alpha[i]) * Math.Cos(Beta[i]) + b[i].X;
-                double ay = HornLength * Math.Cos(Alpha[i]) * Math.Sin(Beta[i]) + b[i].Y;
-                double az = HornLength * Math.Sin(Alpha[i]) + b[i].Z;
+                // --- FIXED STEP 4: Calculate 'a' point (Horn End) for Drawing ---
+
+                // Determine rotation direction based on servo index (Odd vs Even)
+                // Even indices (0, 2, 4) -> Servo 1, 3, 5 -> Rotate +90 degrees (CCW)
+                // Odd indices  (1, 3, 5) -> Servo 2, 4, 6 -> Rotate -90 degrees (CW)
+                double offsetAngle = (i % 2 == 0) ? (Math.PI / 2.0) : -(Math.PI / 2.0);
+
+                // Add the offset to Beta[i] to make the arm tangential
+                double armAngle = Beta[i] + offsetAngle;
+
+                // Calculate the arm position
+                // We project the servo rotation (Alpha) onto this new tangential plane
+                double ax = b[i].X + HornLength * Math.Cos(Alpha[i]) * Math.Cos(armAngle);
+                double ay = b[i].Y + HornLength * Math.Cos(Alpha[i]) * Math.Sin(armAngle);
+                double az = b[i].Z + HornLength * Math.Sin(Alpha[i]);
 
                 HornEndPoints[i] = new Point3D(ax, ay, az);
             }
