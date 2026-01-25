@@ -21,7 +21,8 @@ namespace stewart_platform
 
         // 3. Smooth Movement Engine
         DispatcherTimer movementTimer;
-        private double[] targetValues = new double[6]; // X, Y, Z, Rx, Ry, Rz
+        // targetValues: X, Y, Z, Rx, Ry (Rz is always 0)
+        private double[] targetValues = new double[6];
         private bool isInternalUpdate = false;
 
         // 4. Visual Lists
@@ -66,7 +67,6 @@ namespace stewart_platform
 
             SldRotX.Minimum = -config.MaxRotation; SldRotX.Maximum = config.MaxRotation;
             SldRotY.Minimum = -config.MaxRotation; SldRotY.Maximum = config.MaxRotation;
-            SldRotZ.Minimum = -config.MaxRotation; SldRotZ.Maximum = config.MaxRotation;
         }
 
         private void LoadAvailablePorts()
@@ -76,18 +76,20 @@ namespace stewart_platform
             if (ports.Length > 0) PortSelector.SelectedIndex = 0;
         }
 
+        // --- CORE FIX IS IN THIS FUNCTION ---
         private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (platform == null) return;
 
+            // Update TextBoxes (Show user the positive "Slider" value)
             if (InpPosX != null) InpPosX.Text = SldPosX.Value.ToString("F1");
             if (InpPosY != null) InpPosY.Text = SldPosY.Value.ToString("F1");
             if (InpPosZ != null) InpPosZ.Text = SldPosZ.Value.ToString("F1");
 
             if (InpRotX != null) InpRotX.Text = SldRotX.Value.ToString("F1");
             if (InpRotY != null) InpRotY.Text = SldRotY.Value.ToString("F1");
-            if (InpRotZ != null) InpRotZ.Text = SldRotZ.Value.ToString("F1");
 
+            // Update Target Values for smooth movement logic
             if (!isInternalUpdate)
             {
                 targetValues[0] = SldPosX.Value;
@@ -95,15 +97,19 @@ namespace stewart_platform
                 targetValues[2] = SldPosZ.Value;
                 targetValues[3] = SldRotX.Value;
                 targetValues[4] = SldRotY.Value;
-                targetValues[5] = SldRotZ.Value;
+                targetValues[5] = 0;
             }
 
-            double rx = SldRotX.Value * (Math.PI / 180.0);
-            double ry = SldRotY.Value * (Math.PI / 180.0);
-            double rz = SldRotZ.Value * (Math.PI / 180.0);
+            // [FIX] Invert Rotation Inputs (-SldRot)
+            double rx = -SldRotX.Value * (Math.PI / 180.0);
+            double ry = -SldRotY.Value * (Math.PI / 180.0);
+            double rz = 0;
 
+            // [FIX] Invert Translation Inputs (-SldPos) for X and Y only
             platform.ApplyTranslationAndRotation(
-                SldPosX.Value, SldPosY.Value, SldPosZ.Value,
+                -SldPosX.Value,  // Inverted to match Visual direction
+                -SldPosY.Value,  // Inverted to match Visual direction
+                SldPosZ.Value,   // Z kept Normal
                 rx, ry, rz
             );
 
@@ -115,17 +121,18 @@ namespace stewart_platform
         {
             isInternalUpdate = true;
 
+            // Smooth movement logic simply moves the slider. 
+            // The inversion happens in Slider_ValueChanged above.
             bool doneX = MoveAxisTowards(SldPosX, 0, 0.5);
             bool doneY = MoveAxisTowards(SldPosY, 1, 0.5);
             bool doneZ = MoveAxisTowards(SldPosZ, 2, 0.5);
 
             bool doneRx = MoveAxisTowards(SldRotX, 3, 0.1);
             bool doneRy = MoveAxisTowards(SldRotY, 4, 0.1);
-            bool doneRz = MoveAxisTowards(SldRotZ, 5, 0.1);
 
             isInternalUpdate = false;
 
-            if (doneX && doneY && doneZ && doneRx && doneRy && doneRz)
+            if (doneX && doneY && doneZ && doneRx && doneRy)
             {
                 movementTimer.Stop();
             }
@@ -151,7 +158,6 @@ namespace stewart_platform
 
         private void BtnSetPos_Click(object sender, RoutedEventArgs e)
         {
-            // [FIX] Added null check (?? "") to prevent warning
             string axis = ((Button)sender).Tag?.ToString() ?? "";
             try
             {
@@ -165,13 +171,11 @@ namespace stewart_platform
 
         private void BtnSetRot_Click(object sender, RoutedEventArgs e)
         {
-            // [FIX] Added null check
             string axis = ((Button)sender).Tag?.ToString() ?? "";
             try
             {
                 if (axis == "X") targetValues[3] = double.Parse(InpRotX.Text);
                 if (axis == "Y") targetValues[4] = double.Parse(InpRotY.Text);
-                if (axis == "Z") targetValues[5] = double.Parse(InpRotZ.Text);
                 movementTimer.Start();
             }
             catch { MessageBox.Show("Invalid Number"); }
@@ -203,7 +207,6 @@ namespace stewart_platform
                 if (PortSelector.SelectedItem == null) return;
                 try
                 {
-                    // [FIX] Added null check for SelectedItem
                     string portName = PortSelector.SelectedItem?.ToString() ?? "COM1";
 
                     arduinoPort = new SerialPort(portName, config.BaudRate);
@@ -276,7 +279,6 @@ namespace stewart_platform
             if (arduinoPort == null || !arduinoPort.IsOpen) return;
             try
             {
-                // [FIX] Handled nullable string explicitly
                 string? line = arduinoPort.ReadLine();
 
                 if (!string.IsNullOrEmpty(line) && line.StartsWith("FB:"))
@@ -284,14 +286,13 @@ namespace stewart_platform
                     string cleanData = line.Substring(3).Trim();
                     string[] parts = cleanData.Split(',');
 
-                    if (parts.Length == 4)
+                    if (parts.Length == 3)
                     {
                         Dispatcher.Invoke(() =>
                         {
                             if (double.TryParse(parts[0], out double roll)) TxtSensorRoll.Text = $"{roll:F1}°";
                             if (double.TryParse(parts[1], out double pitch)) TxtSensorPitch.Text = $"{pitch:F1}°";
-                            if (double.TryParse(parts[2], out double yaw)) TxtSensorYaw.Text = $"{yaw:F1}°";
-                            if (double.TryParse(parts[3], out double temp)) TxtSensorTemp.Text = $"{temp:F1}°C";
+                            if (double.TryParse(parts[2], out double temp)) TxtSensorTemp.Text = $"{temp:F1}°C";
                         });
                     }
                 }
