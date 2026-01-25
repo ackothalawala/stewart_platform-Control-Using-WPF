@@ -79,7 +79,7 @@ namespace stewart_platform
 
             for (int i = 0; i < 6; i++)
             {
-                // 1. Calculate q[i] (Platform Joint World Position)
+                // Calculate q[i] (Platform Joint World Positions)
                 double cx = Math.Cos(Rotation.X); double sx = Math.Sin(Rotation.X);
                 double cy = Math.Cos(Rotation.Y); double sy = Math.Sin(Rotation.Y);
                 double cz = Math.Cos(Rotation.Z); double sz = Math.Sin(Rotation.Z);
@@ -94,10 +94,10 @@ namespace stewart_platform
                 // Save q for drawing
                 PlatformPoints[i] = new Point3D(q.X, q.Y, q.Z);
 
-                // 2. Calculate l vector
+                // Calculate l vector
                 Vector3D l = q - b[i];
 
-                // 3. Inverse Kinematics
+                // Inverse Kinematics
                 double L = l.LengthSquared - (RodLength * RodLength) + (HornLength * HornLength);
                 double M = 2 * HornLength * (q.Z - b[i].Z);
                 // Note: Using Beta[i] from config
@@ -109,7 +109,7 @@ namespace stewart_platform
 
                 Alpha[i] = Math.Asin(val) - Math.Atan2(N, M);
 
-                // 4. Calculate 'a' point (Horn End) for Drawing
+                // Calculate 'a' point (Horn End) for Drawing
                 double ax = HornLength * Math.Cos(Alpha[i]) * Math.Cos(Beta[i]) + b[i].X;
                 double ay = HornLength * Math.Cos(Alpha[i]) * Math.Sin(Beta[i]) + b[i].Y;
                 double az = HornLength * Math.Sin(Alpha[i]) + b[i].Z;

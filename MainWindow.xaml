@@ -146,7 +146,7 @@
 
         <helix:HelixViewport3D Grid.Column="1" ZoomExtentsWhenLoaded="True" Background="#333">
             <helix:SunLight/>
-            <helix:GridLinesVisual3D Width="600" Length="600" MajorDistance="50" MinorDistance="10" Thickness="0.5" Fill="#555"/>
+            <helix:GridLinesVisual3D Width="700" Length="700" MajorDistance="50" MinorDistance="10" Thickness="0.5" Fill="#555"/>
             <helix:TubeVisual3D x:Name="VisBase" Diameter="5" Fill="LightGreen"/>
             <helix:TubeVisual3D x:Name="VisPlatform" Diameter="5" Fill="LightBlue"/>
 
