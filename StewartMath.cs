@@ -7,7 +7,7 @@ namespace stewart_platform
     {
         // --- PHYSICAL CONSTANTS ---
         private readonly double[] BASE_ANGLES = { -50, -70, -170, -190, -290, -310 };
-        private readonly double[] PLATFORM_ANGLES = { -54, -66, -174, -186, -294, -306 };
+        private readonly double[] PLATFORM_ANGLES = { -80, -100, -200, -220, -320, -340 };
 
         // Beta angles in Radians
         private readonly double[] BETA = {
@@ -22,10 +22,10 @@ namespace stewart_platform
         public const double ROD_LENGTH = 130;
         private const double INITIAL_HEIGHT = 120.28183632;
 
-        // 3D DRAWING POINTS (Public so the UI can see them)
-        public Point3D[] BasePoints { get; private set; } = new Point3D[6];      // b[]
-        public Point3D[] PlatformPoints { get; private set; } = new Point3D[6];  // q[] (The top joints)
-        public Point3D[] HornEndPoints { get; private set; } = new Point3D[6];   // a[] (The servo arm ends)
+        // 3D DRAWING POINTS
+        public Point3D[] BasePoints { get; private set; } = new Point3D[6];
+        public Point3D[] PlatformPoints { get; private set; } = new Point3D[6];
+        public Point3D[] HornEndPoints { get; private set; } = new Point3D[6];
 
         // Internal Math Vectors
         private Vector3D[] b = new Vector3D[6];
@@ -38,18 +38,19 @@ namespace stewart_platform
         private Vector3D Translation;
         private Vector3D Rotation;
 
+        // --- NEW: Yaw home offset in radians ---
+        private const double YawHomeOffset = 30 * Math.PI / 180.0; // -30° offset
+
         public StewartPlatform()
         {
             // Initialize Geometry
             for (int i = 0; i < 6; i++)
             {
-                // Calculate Base Points (b)
                 double xb = BASE_RADIUS * Math.Cos(ToRadians(BASE_ANGLES[i]));
                 double yb = BASE_RADIUS * Math.Sin(ToRadians(BASE_ANGLES[i]));
                 b[i] = new Vector3D(xb, yb, 0);
-                BasePoints[i] = new Point3D(xb, yb, 0); // Store for drawing
+                BasePoints[i] = new Point3D(xb, yb, 0);
 
-                // Calculate Platform Points (p)
                 double px = PLATFORM_RADIUS * Math.Cos(ToRadians(PLATFORM_ANGLES[i]));
                 double py = PLATFORM_RADIUS * Math.Sin(ToRadians(PLATFORM_ANGLES[i]));
                 p[i] = new Vector3D(px, py, 0);
@@ -69,10 +70,12 @@ namespace stewart_platform
 
             for (int i = 0; i < 6; i++)
             {
-                // 1. Calculate q[i] (Platform Joint World Position)
+                // --- Apply Home Yaw Offset ---
+                double rz = Rotation.Z + YawHomeOffset;
+
                 double cx = Math.Cos(Rotation.X); double sx = Math.Sin(Rotation.X);
                 double cy = Math.Cos(Rotation.Y); double sy = Math.Sin(Rotation.Y);
-                double cz = Math.Cos(Rotation.Z); double sz = Math.Sin(Rotation.Z);
+                double cz = Math.Cos(rz); double sz = Math.Sin(rz);
 
                 double qx = (cz * cy) * p[i].X + (-sz * cx + cz * sy * sx) * p[i].Y + (sz * sx + cz * sy * cx) * p[i].Z;
                 double qy = (sz * cy) * p[i].X + (cz * cx + sz * sy * sx) * p[i].Y + (-cz * sx + sz * sy * cx) * p[i].Z;
@@ -93,12 +96,11 @@ namespace stewart_platform
                 double N = 2 * HORN_LENGTH * (Math.Cos(BETA[i]) * (q.X - b[i].X) + Math.Sin(BETA[i]) * (q.Y - b[i].Y));
 
                 double val = L / Math.Sqrt(M * M + N * N);
-                if (val < -1) val = -1;
-                if (val > 1) val = 1;
+                val = Math.Clamp(val, -1, 1);
 
                 Alpha[i] = Math.Asin(val) - Math.Atan2(N, M);
 
-                // 4. Calculate 'a' point (Horn End) for Drawing [Matches Processing source: 79]
+                // 4. Calculate 'a' point (Horn End) for Drawing
                 double ax = HORN_LENGTH * Math.Cos(Alpha[i]) * Math.Cos(BETA[i]) + b[i].X;
                 double ay = HORN_LENGTH * Math.Cos(Alpha[i]) * Math.Sin(BETA[i]) + b[i].Y;
                 double az = HORN_LENGTH * Math.Sin(Alpha[i]) + b[i].Z;
@@ -107,7 +109,7 @@ namespace stewart_platform
             }
         }
 
-        private double ToRadians(double degrees) { return degrees * (Math.PI / 180.0); }
-        public double GetAlphaDegree(int index) { return Alpha[index] * (180.0 / Math.PI); }
+        private double ToRadians(double degrees) => degrees * (Math.PI / 180.0);
+        public double GetAlphaDegree(int index) => Alpha[index] * (180.0 / Math.PI);
     }
 }
