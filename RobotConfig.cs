@@ -5,7 +5,7 @@ namespace stewart_platform
     public class RobotConfig
     {
         // --- Dimensions (mm) ---
-        public double BaseRadius { get; set; } = 86.0;
+        public double BaseRadius { get; set; } = 91.56;
         public double PlatformRadius { get; set; } = 56.0;
         public double HornLength { get; set; } = 36.845;
         public double RodLength { get; set; } = 144.0;
