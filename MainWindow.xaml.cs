@@ -80,8 +80,13 @@ namespace stewart_platform
         private void LoadAvailablePorts()
         {
             string[] ports = SerialPort.GetPortNames();
-            ModalPortSelector.ItemsSource = ports;
-            if (ports.Length > 0) ModalPortSelector.SelectedIndex = 0;
+            ComboUsbPort.ItemsSource = ports;
+            ComboDonglePort.ItemsSource = ports;
+            if (ports.Length > 0)
+            {
+                ComboUsbPort.SelectedIndex = 0;
+                ComboDonglePort.SelectedIndex = 0;
+            }
         }
 
         private void BtnRefreshPorts_Click(object sender, RoutedEventArgs e)
@@ -121,19 +126,18 @@ namespace stewart_platform
             {
                 if (isWifiMode)
                 {
-                    // Establish WebSocket Connection
                     string url = TxtWifiUrl.Text.Trim();
                     wsClient = new ClientWebSocket();
                     await wsClient.ConnectAsync(new Uri(url), CancellationToken.None);
-
-                    // Start listening loop in the background
                     _ = Task.Run(ReceiveWebSocketData);
                 }
                 else
                 {
-                    // Establish Serial Connection
-                    if (ModalPortSelector.SelectedItem == null) throw new Exception("No COM port selected");
-                    string portName = ModalPortSelector.SelectedItem.ToString() ?? "";
+                    // Check which radio button is active and grab the correct dropdown
+                    ComboBox activeCombo = RadioSerial.IsChecked == true ? ComboUsbPort : ComboDonglePort;
+                    if (activeCombo.SelectedItem == null) throw new Exception("No COM port selected");
+
+                    string portName = activeCombo.SelectedItem.ToString() ?? "";
                     arduinoPort = new SerialPort(portName, config.BaudRate);
                     arduinoPort.Open();
                     arduinoPort.DataReceived += ArduinoPort_DataReceived;
@@ -142,7 +146,12 @@ namespace stewart_platform
                 isConnected = true;
                 sendTimer.Start();
                 BtnConnect.Content = "Disconnect";
-                TxtStatus.Text = isWifiMode ? "Connected (Wi-Fi)" : "Connected (USB)";
+
+                // Update text based on exact connection type
+                if (RadioWifi.IsChecked == true) TxtStatus.Text = "Connected (Wi-Fi)";
+                else if (RadioDongle.IsChecked == true) TxtStatus.Text = "Connected (Dongle)";
+                else TxtStatus.Text = "Connected (USB)";
+
                 TxtStatus.Foreground = System.Windows.Media.Brushes.Green;
             }
             catch (Exception ex)
