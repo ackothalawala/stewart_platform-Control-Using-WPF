@@ -1,6 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO.Ports;
+using System.Net.WebSockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Media3D;
@@ -17,6 +21,10 @@ namespace stewart_platform
 
         // 2. Hardware Comms
         SerialPort? arduinoPort;
+        ClientWebSocket? wsClient;
+        bool isConnected = false;
+        bool isWifiMode = false;
+
         DispatcherTimer sendTimer;
 
         // 3. Smooth Movement Engine
@@ -48,7 +56,7 @@ namespace stewart_platform
 
             sendTimer = new DispatcherTimer();
             sendTimer.Interval = TimeSpan.FromMilliseconds(40);
-            sendTimer.Tick += SendDataToArduino;
+            sendTimer.Tick += SendDataToPlatform;
 
             movementTimer = new DispatcherTimer();
             movementTimer.Interval = TimeSpan.FromMilliseconds(20);
@@ -72,10 +80,198 @@ namespace stewart_platform
         private void LoadAvailablePorts()
         {
             string[] ports = SerialPort.GetPortNames();
-            PortSelector.ItemsSource = ports;
-            if (ports.Length > 0) PortSelector.SelectedIndex = 0;
+            ComboUsbPort.ItemsSource = ports;
+            ComboDonglePort.ItemsSource = ports;
+            if (ports.Length > 0)
+            {
+                ComboUsbPort.SelectedIndex = 0;
+                ComboDonglePort.SelectedIndex = 0;
+            }
         }
 
+        private void BtnRefreshPorts_Click(object sender, RoutedEventArgs e)
+        {
+            LoadAvailablePorts();
+        }
+
+        // --- Connection Modal Logic ---
+        private void BtnConnect_Click(object sender, RoutedEventArgs e)
+        {
+            if (isConnected)
+            {
+                DisconnectFromPlatform();
+            }
+            else
+            {
+                LoadAvailablePorts(); // Refresh ports before opening
+                ModalOverlay.Visibility = Visibility.Visible;
+            }
+        }
+
+        private void BtnModalCancel_Click(object sender, RoutedEventArgs e)
+        {
+            ModalOverlay.Visibility = Visibility.Collapsed;
+        }
+
+        private async void BtnModalConnect_Click(object sender, RoutedEventArgs e)
+        {
+            // Close Modal immediately
+            ModalOverlay.Visibility = Visibility.Collapsed;
+            TxtStatus.Text = "Connecting...";
+            TxtStatus.Foreground = System.Windows.Media.Brushes.Orange;
+
+            isWifiMode = RadioWifi.IsChecked == true;
+
+            try
+            {
+                if (isWifiMode)
+                {
+                    string url = TxtWifiUrl.Text.Trim();
+                    wsClient = new ClientWebSocket();
+                    await wsClient.ConnectAsync(new Uri(url), CancellationToken.None);
+                    _ = Task.Run(ReceiveWebSocketData);
+                }
+                else
+                {
+                    // Check which radio button is active and grab the correct dropdown
+                    ComboBox activeCombo = RadioSerial.IsChecked == true ? ComboUsbPort : ComboDonglePort;
+                    if (activeCombo.SelectedItem == null) throw new Exception("No COM port selected");
+
+                    string portName = activeCombo.SelectedItem.ToString() ?? "";
+                    arduinoPort = new SerialPort(portName, config.BaudRate);
+                    arduinoPort.Open();
+                    arduinoPort.DataReceived += ArduinoPort_DataReceived;
+                }
+
+                isConnected = true;
+                sendTimer.Start();
+                BtnConnect.Content = "Disconnect";
+
+                // Update text based on exact connection type
+                if (RadioWifi.IsChecked == true) TxtStatus.Text = "Connected (Wi-Fi)";
+                else if (RadioDongle.IsChecked == true) TxtStatus.Text = "Connected (Dongle)";
+                else TxtStatus.Text = "Connected (USB)";
+
+                TxtStatus.Foreground = System.Windows.Media.Brushes.Green;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Connection Failed: " + ex.Message, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                DisconnectFromPlatform();
+            }
+        }
+
+        private void DisconnectFromPlatform()
+        {
+            sendTimer.Stop();
+
+            if (arduinoPort != null && arduinoPort.IsOpen)
+            {
+                arduinoPort.DataReceived -= ArduinoPort_DataReceived;
+                arduinoPort.Close();
+            }
+
+            if (wsClient != null && wsClient.State == WebSocketState.Open)
+            {
+                // Fire and forget closure
+                _ = wsClient.CloseAsync(WebSocketCloseStatus.NormalClosure, "Client disconnecting", CancellationToken.None);
+            }
+
+            isConnected = false;
+            BtnConnect.Content = "Connect Platform";
+            TxtStatus.Text = "Disconnected";
+            TxtStatus.Foreground = System.Windows.Media.Brushes.Red;
+        }
+
+
+        // --- Hardware Data Handling ---
+        private async void SendDataToPlatform(object? sender, EventArgs e)
+        {
+            if (!isConnected) return;
+            for (int i = 0; i < 6; i++) if (double.IsNaN(platform.Alpha[i])) return;
+
+            try
+            {
+                string dataStr = "";
+                for (int i = 0; i < 6; i++)
+                {
+                    int val = (int)(platform.GetAlphaDegree(i) * 100);
+                    dataStr += val.ToString();
+                    if (i < 5) dataStr += ",";
+                }
+
+                if (isWifiMode && wsClient != null && wsClient.State == WebSocketState.Open)
+                {
+                    // Send text payload over WebSocket
+                    var bytes = Encoding.UTF8.GetBytes(dataStr);
+                    await wsClient.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                }
+                else if (!isWifiMode && arduinoPort != null && arduinoPort.IsOpen)
+                {
+                    // Send bytes + string over Serial
+                    byte[] header = { 0x6A, 0x6A };
+                    arduinoPort.Write(header, 0, 2);
+                    arduinoPort.Write(dataStr + "\n");
+                }
+            }
+            catch (Exception)
+            {
+                DisconnectFromPlatform();
+            }
+        }
+
+        private async Task ReceiveWebSocketData()
+        {
+            var buffer = new byte[1024];
+            while (wsClient != null && wsClient.State == WebSocketState.Open)
+            {
+                try
+                {
+                    var result = await wsClient.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                    if (result.MessageType == WebSocketMessageType.Text)
+                    {
+                        string msg = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                        ProcessFeedbackLine(msg);
+                    }
+                }
+                catch { break; } // Exit loop if socket closes/errors
+            }
+        }
+
+        private void ArduinoPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
+        {
+            if (arduinoPort == null || !arduinoPort.IsOpen) return;
+            try
+            {
+                string? line = arduinoPort.ReadLine();
+                ProcessFeedbackLine(line);
+            }
+            catch { }
+        }
+
+        // Shared parsing method for both USB and Wi-Fi
+        private void ProcessFeedbackLine(string? line)
+        {
+            if (!string.IsNullOrEmpty(line) && line.StartsWith("FB:"))
+            {
+                string cleanData = line.Substring(3).Trim();
+                string[] parts = cleanData.Split(',');
+
+                if (parts.Length == 4)
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (double.TryParse(parts[0], out double roll)) TxtSensorRoll.Text = $"{roll:F1}°";
+                        if (double.TryParse(parts[1], out double pitch)) TxtSensorPitch.Text = $"{pitch:F1}°";
+                        if (double.TryParse(parts[2], out double yaw)) TxtSensorYaw.Text = $"{yaw:F1}°";
+                        if (double.TryParse(parts[3], out double temp)) TxtSensorTemp.Text = $"{temp:F1}°C";
+                    });
+                }
+            }
+        }
+
+
+        // --- UI & Movement Logic ---
         private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (platform == null) return;
@@ -102,10 +298,7 @@ namespace stewart_platform
             double ry = SldRotY.Value * (Math.PI / 180.0);
             double rz = SldRotZ.Value * (Math.PI / 180.0);
 
-            platform.ApplyTranslationAndRotation(
-                SldPosX.Value, SldPosY.Value, SldPosZ.Value,
-                rx, ry, rz
-            );
+            platform.ApplyTranslationAndRotation(SldPosX.Value, SldPosY.Value, SldPosZ.Value, rx, ry, rz);
 
             UpdateUI();
             Update3DVisualization();
@@ -114,15 +307,12 @@ namespace stewart_platform
         private void MovementTimer_Tick(object? sender, EventArgs e)
         {
             isInternalUpdate = true;
-
             bool doneX = MoveAxisTowards(SldPosX, 0, 0.5);
             bool doneY = MoveAxisTowards(SldPosY, 1, 0.5);
             bool doneZ = MoveAxisTowards(SldPosZ, 2, 0.5);
-
             bool doneRx = MoveAxisTowards(SldRotX, 3, 0.1);
             bool doneRy = MoveAxisTowards(SldRotY, 4, 0.1);
             bool doneRz = MoveAxisTowards(SldRotZ, 5, 0.1);
-
             isInternalUpdate = false;
 
             if (doneX && doneY && doneZ && doneRx && doneRy && doneRz)
@@ -151,7 +341,6 @@ namespace stewart_platform
 
         private void BtnSetPos_Click(object sender, RoutedEventArgs e)
         {
-            // [FIX] Added null check (?? "") to prevent warning
             string axis = ((Button)sender).Tag?.ToString() ?? "";
             try
             {
@@ -165,7 +354,6 @@ namespace stewart_platform
 
         private void BtnSetRot_Click(object sender, RoutedEventArgs e)
         {
-            // [FIX] Added null check
             string axis = ((Button)sender).Tag?.ToString() ?? "";
             try
             {
@@ -181,45 +369,6 @@ namespace stewart_platform
         {
             for (int i = 0; i < 6; i++) targetValues[i] = 0;
             movementTimer.Start();
-        }
-
-        private void BtnConnect_Click(object sender, RoutedEventArgs e)
-        {
-            if (arduinoPort != null && arduinoPort.IsOpen)
-            {
-                try
-                {
-                    arduinoPort.DataReceived -= ArduinoPort_DataReceived;
-                    arduinoPort.Close();
-                }
-                catch { }
-                sendTimer.Stop();
-                BtnConnect.Content = "Connect";
-                TxtStatus.Text = "Disconnected";
-                TxtStatus.Foreground = System.Windows.Media.Brushes.Red;
-            }
-            else
-            {
-                if (PortSelector.SelectedItem == null) return;
-                try
-                {
-                    // [FIX] Added null check for SelectedItem
-                    string portName = PortSelector.SelectedItem?.ToString() ?? "COM1";
-
-                    arduinoPort = new SerialPort(portName, config.BaudRate);
-                    arduinoPort.Open();
-                    arduinoPort.DataReceived += ArduinoPort_DataReceived;
-
-                    sendTimer.Start();
-                    BtnConnect.Content = "Disconnect";
-                    TxtStatus.Text = "Connected";
-                    TxtStatus.Foreground = System.Windows.Media.Brushes.Green;
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Error: " + ex.Message);
-                }
-            }
         }
 
         private void Update3DVisualization()
@@ -246,57 +395,6 @@ namespace stewart_platform
                 rodPath.Add(platform.PlatformPoints[i]);
                 rodVisuals[i].Path = rodPath;
             }
-        }
-
-        private void SendDataToArduino(object? sender, EventArgs e)
-        {
-            if (arduinoPort == null || !arduinoPort.IsOpen) return;
-            for (int i = 0; i < 6; i++) if (double.IsNaN(platform.Alpha[i])) return;
-
-            try
-            {
-                byte[] header = { 0x6A, 0x6A };
-                arduinoPort.Write(header, 0, 2);
-
-                string data = "";
-                for (int i = 0; i < 6; i++)
-                {
-                    int val = (int)(platform.GetAlphaDegree(i) * 100);
-                    data += val.ToString();
-                    if (i < 5) data += ",";
-                }
-                data += "\n";
-                arduinoPort.Write(data);
-            }
-            catch (Exception) { sendTimer.Stop(); }
-        }
-
-        private void ArduinoPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
-        {
-            if (arduinoPort == null || !arduinoPort.IsOpen) return;
-            try
-            {
-                // [FIX] Handled nullable string explicitly
-                string? line = arduinoPort.ReadLine();
-
-                if (!string.IsNullOrEmpty(line) && line.StartsWith("FB:"))
-                {
-                    string cleanData = line.Substring(3).Trim();
-                    string[] parts = cleanData.Split(',');
-
-                    if (parts.Length == 4)
-                    {
-                        Dispatcher.Invoke(() =>
-                        {
-                            if (double.TryParse(parts[0], out double roll)) TxtSensorRoll.Text = $"{roll:F1}°";
-                            if (double.TryParse(parts[1], out double pitch)) TxtSensorPitch.Text = $"{pitch:F1}°";
-                            if (double.TryParse(parts[2], out double yaw)) TxtSensorYaw.Text = $"{yaw:F1}°";
-                            if (double.TryParse(parts[3], out double temp)) TxtSensorTemp.Text = $"{temp:F1}°C";
-                        });
-                    }
-                }
-            }
-            catch { }
         }
 
         private void UpdateUI()
