@@ -5,11 +5,11 @@ namespace stewart_platform
     public class RobotConfig
     {
         // --- Dimensions (mm) ---
-        public double BaseRadius { get; set; } = 91.56;
-        public double PlatformRadius { get; set; } = 56.0;
-        public double HornLength { get; set; } = 36.845;
-        public double RodLength { get; set; } = 144.0;
-        public double InitialHeight { get; set; } = 132.890;
+        public double BaseRadius { get; set; } = 300.0;
+        public double PlatformRadius { get; set; } = 294.6;
+        public double HornLength { get; set; } = 45.0;
+        public double RodLength { get; set; } = 120.0;
+        public double InitialHeight { get; set; } = 100.0;
 
         // --- Base & Platform Angles (degrees) ---
         public double[] BaseAngles { get; set; } =
@@ -37,3 +37,5 @@ namespace stewart_platform
         public int BaudRate { get; set; } = 115200;
     }
 }
+
+
