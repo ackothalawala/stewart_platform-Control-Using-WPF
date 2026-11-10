@@ -1,57 +1,42 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.IO.Ports;
-using System.Net.WebSockets;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media.Media3D;
+using System.Windows.Media;
 using System.Windows.Threading;
 using HelixToolkit.Wpf;
+using stewart_platform.Services;
+using stewart_platform.Visualization;
 
 namespace stewart_platform
 {
     public partial class MainWindow : Window
     {
-        // 1. Configuration & Engine
-        RobotConfig config = new RobotConfig();
-        StewartPlatform platform;
+        // Existing platform configuration and kinematics are not modified.
+        private readonly RobotConfig config = new RobotConfig();
+        private readonly StewartPlatform platform;
 
-        // 2. Hardware Comms
-        SerialPort? arduinoPort;
-        ClientWebSocket? wsClient;
-        bool isConnected = false;
-        bool isWifiMode = false;
-
-        DispatcherTimer sendTimer;
-
-        // 3. Smooth Movement Engine
-        DispatcherTimer movementTimer;
-        private double[] targetValues = new double[6]; // X, Y, Z, Rx, Ry, Rz
-        private bool isInternalUpdate = false;
-
-        // 4. Visual Lists
-        List<TubeVisual3D> hornVisuals = new List<TubeVisual3D>();
-        List<TubeVisual3D> rodVisuals = new List<TubeVisual3D>();
+        private readonly PlatformConnectionService connection = new PlatformConnectionService();
+        private readonly PlatformMovementService movement = new PlatformMovementService();
+        private readonly StewartVisualizer visualizer;
+        private readonly DispatcherTimer sendTimer;
+        private readonly DispatcherTimer movementTimer;
+        private readonly double[] targetValues = new double[6]; // X, Y, Z, Rx, Ry, Rz
+        private bool isInternalUpdate;
 
         public MainWindow()
         {
             InitializeComponent();
 
             platform = new StewartPlatform(config);
-
             SetupSliders();
 
-            hornVisuals.Add(VisHorn0); hornVisuals.Add(VisHorn1);
-            hornVisuals.Add(VisHorn2); hornVisuals.Add(VisHorn3);
-            hornVisuals.Add(VisHorn4); hornVisuals.Add(VisHorn5);
+            visualizer = new StewartVisualizer(
+                VisBase, VisPlatform,
+                new List<TubeVisual3D> { VisHorn0, VisHorn1, VisHorn2, VisHorn3, VisHorn4, VisHorn5 },
+                new List<TubeVisual3D> { VisRod0, VisRod1, VisRod2, VisRod3, VisRod4, VisRod5 });
 
-            rodVisuals.Add(VisRod0); rodVisuals.Add(VisRod1);
-            rodVisuals.Add(VisRod2); rodVisuals.Add(VisRod3);
-            rodVisuals.Add(VisRod4); rodVisuals.Add(VisRod5);
-
+            connection.FeedbackLineReceived += ProcessFeedbackLine;
             LoadAvailablePorts();
 
             sendTimer = new DispatcherTimer();
@@ -79,7 +64,7 @@ namespace stewart_platform
 
         private void LoadAvailablePorts()
         {
-            string[] ports = SerialPort.GetPortNames();
+            string[] ports = PlatformConnectionService.GetAvailablePorts();
             ComboUsbPort.ItemsSource = ports;
             ComboDonglePort.ItemsSource = ports;
             if (ports.Length > 0)
@@ -89,21 +74,15 @@ namespace stewart_platform
             }
         }
 
-        private void BtnRefreshPorts_Click(object sender, RoutedEventArgs e)
-        {
-            LoadAvailablePorts();
-        }
+        private void BtnRefreshPorts_Click(object sender, RoutedEventArgs e) => LoadAvailablePorts();
 
-        // --- Connection Modal Logic ---
         private void BtnConnect_Click(object sender, RoutedEventArgs e)
         {
-            if (isConnected)
-            {
+            if (connection.IsConnected)
                 DisconnectFromPlatform();
-            }
             else
             {
-                LoadAvailablePorts(); // Refresh ports before opening
+                LoadAvailablePorts();
                 ModalOverlay.Visibility = Visibility.Visible;
             }
         }
@@ -115,44 +94,34 @@ namespace stewart_platform
 
         private async void BtnModalConnect_Click(object sender, RoutedEventArgs e)
         {
-            // Close Modal immediately
             ModalOverlay.Visibility = Visibility.Collapsed;
             TxtStatus.Text = "Connecting...";
-            TxtStatus.Foreground = System.Windows.Media.Brushes.Orange;
+            TxtStatus.Foreground = Brushes.Orange;
 
-            isWifiMode = RadioWifi.IsChecked == true;
-
+            bool isWifiMode = RadioWifi.IsChecked == true;
             try
             {
                 if (isWifiMode)
                 {
                     string url = TxtWifiUrl.Text.Trim();
-                    wsClient = new ClientWebSocket();
-                    await wsClient.ConnectAsync(new Uri(url), CancellationToken.None);
-                    _ = Task.Run(ReceiveWebSocketData);
+                    await connection.ConnectWifiAsync(url);
                 }
                 else
                 {
-                    // Check which radio button is active and grab the correct dropdown
                     ComboBox activeCombo = RadioSerial.IsChecked == true ? ComboUsbPort : ComboDonglePort;
                     if (activeCombo.SelectedItem == null) throw new Exception("No COM port selected");
-
                     string portName = activeCombo.SelectedItem.ToString() ?? "";
-                    arduinoPort = new SerialPort(portName, config.BaudRate);
-                    arduinoPort.Open();
-                    arduinoPort.DataReceived += ArduinoPort_DataReceived;
+                    connection.ConnectSerial(portName, config.BaudRate);
                 }
 
-                isConnected = true;
                 sendTimer.Start();
                 BtnConnect.Content = "Disconnect";
 
-                // Update text based on exact connection type
                 if (RadioWifi.IsChecked == true) TxtStatus.Text = "Connected (Wi-Fi)";
                 else if (RadioDongle.IsChecked == true) TxtStatus.Text = "Connected (Dongle)";
                 else TxtStatus.Text = "Connected (USB)";
 
-                TxtStatus.Foreground = System.Windows.Media.Brushes.Green;
+                TxtStatus.Foreground = Brushes.Green;
             }
             catch (Exception ex)
             {
@@ -164,55 +133,21 @@ namespace stewart_platform
         private void DisconnectFromPlatform()
         {
             sendTimer.Stop();
-
-            if (arduinoPort != null && arduinoPort.IsOpen)
-            {
-                arduinoPort.DataReceived -= ArduinoPort_DataReceived;
-                arduinoPort.Close();
-            }
-
-            if (wsClient != null && wsClient.State == WebSocketState.Open)
-            {
-                // Fire and forget closure
-                _ = wsClient.CloseAsync(WebSocketCloseStatus.NormalClosure, "Client disconnecting", CancellationToken.None);
-            }
-
-            isConnected = false;
+            connection.Disconnect();
             BtnConnect.Content = "Connect Platform";
             TxtStatus.Text = "Disconnected";
-            TxtStatus.Foreground = System.Windows.Media.Brushes.Red;
+            TxtStatus.Foreground = Brushes.Red;
         }
 
-
-        // --- Hardware Data Handling ---
         private async void SendDataToPlatform(object? sender, EventArgs e)
         {
-            if (!isConnected) return;
+            if (!connection.IsConnected) return;
             for (int i = 0; i < 6; i++) if (double.IsNaN(platform.Alpha[i])) return;
 
             try
             {
-                string dataStr = "";
-                for (int i = 0; i < 6; i++)
-                {
-                    int val = (int)(platform.GetAlphaDegree(i) * 100);
-                    dataStr += val.ToString();
-                    if (i < 5) dataStr += ",";
-                }
-
-                if (isWifiMode && wsClient != null && wsClient.State == WebSocketState.Open)
-                {
-                    // Send text payload over WebSocket
-                    var bytes = Encoding.UTF8.GetBytes(dataStr);
-                    await wsClient.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
-                }
-                else if (!isWifiMode && arduinoPort != null && arduinoPort.IsOpen)
-                {
-                    // Send bytes + string over Serial
-                    byte[] header = { 0x6A, 0x6A };
-                    arduinoPort.Write(header, 0, 2);
-                    arduinoPort.Write(dataStr + "\n");
-                }
+                string dataStr = ServoCommandFormatter.Format(platform);
+                await connection.SendAsync(dataStr);
             }
             catch (Exception)
             {
@@ -220,58 +155,19 @@ namespace stewart_platform
             }
         }
 
-        private async Task ReceiveWebSocketData()
-        {
-            var buffer = new byte[1024];
-            while (wsClient != null && wsClient.State == WebSocketState.Open)
-            {
-                try
-                {
-                    var result = await wsClient.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
-                    if (result.MessageType == WebSocketMessageType.Text)
-                    {
-                        string msg = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                        ProcessFeedbackLine(msg);
-                    }
-                }
-                catch { break; } // Exit loop if socket closes/errors
-            }
-        }
-
-        private void ArduinoPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
-        {
-            if (arduinoPort == null || !arduinoPort.IsOpen) return;
-            try
-            {
-                string? line = arduinoPort.ReadLine();
-                ProcessFeedbackLine(line);
-            }
-            catch { }
-        }
-
-        // Shared parsing method for both USB and Wi-Fi
         private void ProcessFeedbackLine(string? line)
         {
-            if (!string.IsNullOrEmpty(line) && line.StartsWith("FB:"))
-            {
-                string cleanData = line.Substring(3).Trim();
-                string[] parts = cleanData.Split(',');
+            if (!SensorFeedbackParser.TryGetFields(line, out string[] parts)) return;
 
-                if (parts.Length == 4)
-                {
-                    Dispatcher.Invoke(() =>
-                    {
-                        if (double.TryParse(parts[0], out double roll)) TxtSensorRoll.Text = $"{roll:F1}°";
-                        if (double.TryParse(parts[1], out double pitch)) TxtSensorPitch.Text = $"{pitch:F1}°";
-                        if (double.TryParse(parts[2], out double yaw)) TxtSensorYaw.Text = $"{yaw:F1}°";
-                        if (double.TryParse(parts[3], out double temp)) TxtSensorTemp.Text = $"{temp:F1}°C";
-                    });
-                }
-            }
+            Dispatcher.Invoke(() =>
+            {
+                if (double.TryParse(parts[0], out double roll)) TxtSensorRoll.Text = $"{roll:F1}°";
+                if (double.TryParse(parts[1], out double pitch)) TxtSensorPitch.Text = $"{pitch:F1}°";
+                if (double.TryParse(parts[2], out double yaw)) TxtSensorYaw.Text = $"{yaw:F1}°";
+                if (double.TryParse(parts[3], out double temp)) TxtSensorTemp.Text = $"{temp:F1}°C";
+            });
         }
 
-
-        // --- UI & Movement Logic ---
         private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (platform == null) return;
@@ -297,9 +193,7 @@ namespace stewart_platform
             double rx = SldRotX.Value * (Math.PI / 180.0);
             double ry = SldRotY.Value * (Math.PI / 180.0);
             double rz = SldRotZ.Value * (Math.PI / 180.0);
-
             platform.ApplyTranslationAndRotation(SldPosX.Value, SldPosY.Value, SldPosZ.Value, rx, ry, rz);
-
             UpdateUI();
             Update3DVisualization();
         }
@@ -316,27 +210,14 @@ namespace stewart_platform
             isInternalUpdate = false;
 
             if (doneX && doneY && doneZ && doneRx && doneRy && doneRz)
-            {
                 movementTimer.Stop();
-            }
         }
 
         private bool MoveAxisTowards(Slider sld, int targetIndex, double step)
         {
-            double current = sld.Value;
             double target = targetValues[targetIndex];
-            double diff = target - current;
-
-            if (Math.Abs(diff) > step)
-            {
-                sld.Value += Math.Sign(diff) * step;
-                return false;
-            }
-            else
-            {
-                sld.Value = target;
-                return true;
-            }
+            sld.Value = movement.MoveTowards(sld.Value, target, step);
+            return sld.Value == target;
         }
 
         private void BtnSetPos_Click(object sender, RoutedEventArgs e)
@@ -371,31 +252,7 @@ namespace stewart_platform
             movementTimer.Start();
         }
 
-        private void Update3DVisualization()
-        {
-            var basePath = new Point3DCollection();
-            foreach (var p in platform.BasePoints) basePath.Add(p);
-            basePath.Add(platform.BasePoints[0]);
-            VisBase.Path = basePath;
-
-            var platPath = new Point3DCollection();
-            foreach (var p in platform.PlatformPoints) platPath.Add(p);
-            platPath.Add(platform.PlatformPoints[0]);
-            VisPlatform.Path = platPath;
-
-            for (int i = 0; i < 6; i++)
-            {
-                var hornPath = new Point3DCollection();
-                hornPath.Add(platform.BasePoints[i]);
-                hornPath.Add(platform.HornEndPoints[i]);
-                hornVisuals[i].Path = hornPath;
-
-                var rodPath = new Point3DCollection();
-                rodPath.Add(platform.HornEndPoints[i]);
-                rodPath.Add(platform.PlatformPoints[i]);
-                rodVisuals[i].Path = rodPath;
-            }
-        }
+        private void Update3DVisualization() => visualizer.Update(platform);
 
         private void UpdateUI()
         {
