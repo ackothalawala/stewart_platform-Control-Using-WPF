@@ -23,6 +23,19 @@
                     </StackPanel>
                 </GroupBox>
 
+                <GroupBox Header="Control Mode" Margin="0,0,0,10" Padding="5">
+                    <StackPanel>
+                        <Button x:Name="BtnModeToggle" Content="Switch to Closed Loop"
+                                Click="BtnModeToggle_Click" Padding="6" Margin="0,0,0,5"/>
+                        <TextBlock x:Name="TxtModeStatus" Text="Open Loop: manual pose" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="TxtLoopStatus" Text="Open loop" TextWrapping="Wrap" Margin="0,4,0,3"/>
+                        <TextBlock x:Name="TxtErrRoll" Text="Roll error: --"/>
+                        <TextBlock x:Name="TxtErrPitch" Text="Pitch error: --"/>
+                        <TextBlock Text="Closed Loop: roll/pitch only. Yaw is open-loop (MPU6050 drifts)."
+                                   TextWrapping="Wrap" Foreground="#9C5300" Margin="0,5,0,0"/>
+                    </StackPanel>
+                </GroupBox>
+
                 <GroupBox Header="Position (mm)" Margin="0,0,0,10" Padding="5">
                     <StackPanel>
                         <Grid Margin="0,2">

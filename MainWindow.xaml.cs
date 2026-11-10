@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using stewart_platform.Control;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -23,6 +25,16 @@ namespace stewart_platform
         private readonly DispatcherTimer movementTimer;
         private readonly double[] targetValues = new double[6]; // X, Y, Z, Rx, Ry, Rz
         private bool isInternalUpdate;
+        private bool isClosedLoop;
+        private bool hasFeedback;
+        private DateTime lastFeedbackUtc = DateTime.MinValue;
+        private double feedbackRoll, feedbackPitch;
+        private DateTime lastControllerUpdateUtc = DateTime.MinValue;
+        private readonly DispatcherTimer controlTimer;
+        private readonly PlatformLevelController levelController = new PlatformLevelController();
+        private const double MaximumSafeRotationDegrees = 8.0;
+        private bool isSending;
+        private bool transmissionInhibited;
 
         public MainWindow()
         {
@@ -47,8 +59,13 @@ namespace stewart_platform
             movementTimer.Interval = TimeSpan.FromMilliseconds(20);
             movementTimer.Tick += MovementTimer_Tick;
 
+            controlTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
+            controlTimer.Tick += ControlTimer_Tick;
+            controlTimer.Start();
+
             platform.ApplyTranslationAndRotation(0, 0, 0, 0, 0, 0);
             Update3DVisualization();
+            UpdateModeUI();
         }
 
         private void SetupSliders()
@@ -114,6 +131,9 @@ namespace stewart_platform
                     connection.ConnectSerial(portName, config.BaudRate);
                 }
 
+                hasFeedback = false;
+                transmissionInhibited = false;
+                levelController.Reset();
                 sendTimer.Start();
                 BtnConnect.Content = "Disconnect";
 
@@ -133,6 +153,9 @@ namespace stewart_platform
         private void DisconnectFromPlatform()
         {
             sendTimer.Stop();
+            isClosedLoop = false;
+            levelController.Reset();
+            UpdateModeUI();
             connection.Disconnect();
             BtnConnect.Content = "Connect Platform";
             TxtStatus.Text = "Disconnected";
@@ -141,32 +164,168 @@ namespace stewart_platform
 
         private async void SendDataToPlatform(object? sender, EventArgs e)
         {
-            if (!connection.IsConnected) return;
-            for (int i = 0; i < 6; i++) if (double.IsNaN(platform.Alpha[i])) return;
-
+            if (!connection.IsConnected || isSending || transmissionInhibited) return;
+            // Fail safe: do not keep issuing fresh commands without fresh feedback.
+            // Closed loop is disabled (and sending stops) when feedback is lost.
+            if (isClosedLoop && !FeedbackIsFresh())
+            {
+                InhibitCommands("Sensor feedback lost — commands halted. Reconnect to resume.");
+                return;
+            }
+            for (int i = 0; i < 6; i++)
+            {
+                double angle = platform.GetAlphaDegree(i);
+                if (!double.IsFinite(angle) || Math.Abs(angle) > 90.0)
+                {
+                    if (isClosedLoop) InhibitCommands("Invalid servo angle — commands halted. Reconnect to resume.");
+                    return;
+                }
+            }
+            isSending = true;
             try
             {
                 string dataStr = ServoCommandFormatter.Format(platform);
                 await connection.SendAsync(dataStr);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine("Send failed: " + ex);
                 DisconnectFromPlatform();
             }
+            finally { isSending = false; }
         }
 
         private void ProcessFeedbackLine(string? line)
         {
             if (!SensorFeedbackParser.TryGetFields(line, out string[] parts)) return;
+            // Parses ESP32's FB:roll,pitch,yaw,temp regardless of Windows locale.
+            if (!double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double roll) ||
+                !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double pitch) ||
+                !double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out double yaw) ||
+                !double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out double temp) ||
+                !double.IsFinite(roll) || !double.IsFinite(pitch) ||
+                !double.IsFinite(yaw) || !double.IsFinite(temp)) return;
 
-            Dispatcher.Invoke(() =>
+            Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (double.TryParse(parts[0], out double roll)) TxtSensorRoll.Text = $"{roll:F1}°";
-                if (double.TryParse(parts[1], out double pitch)) TxtSensorPitch.Text = $"{pitch:F1}°";
-                if (double.TryParse(parts[2], out double yaw)) TxtSensorYaw.Text = $"{yaw:F1}°";
-                if (double.TryParse(parts[3], out double temp)) TxtSensorTemp.Text = $"{temp:F1}°C";
-            });
+                feedbackRoll = roll;
+                feedbackPitch = pitch;
+                hasFeedback = true;
+                lastFeedbackUtc = DateTime.UtcNow;
+                TxtSensorRoll.Text = $"{roll:F1}°";
+                TxtSensorPitch.Text = $"{pitch:F1}°";
+                TxtSensorYaw.Text = $"{yaw:F1}°";
+                TxtSensorTemp.Text = $"{temp:F1}°C";
+            }));
         }
+
+        private bool FeedbackIsFresh() => hasFeedback &&
+            (DateTime.UtcNow - lastFeedbackUtc).TotalMilliseconds < 350;
+
+        private void BtnModeToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (isClosedLoop)
+            {
+                DisableClosedLoop("Open Loop: slider positions control the servos.");
+                return;
+            }
+
+            if (transmissionInhibited)
+            {
+                MessageBox.Show("Control is inhibited due to a fault. Disconnect, inspect hardware, then reconnect.");
+                return;
+            }
+            if (!connection.IsConnected)
+            {
+                MessageBox.Show("Connect your ESP32 first.");
+                return;
+            }
+            if (!FeedbackIsFresh() || Math.Abs(feedbackRoll) > 45 || Math.Abs(feedbackPitch) > 45)
+            {
+                MessageBox.Show("Valid, recent MPU6050 roll/pitch feedback is required.");
+                return;
+            }
+
+            // Verify correct IMU attachment/orientation and servo response first.
+            isClosedLoop = true;
+            levelController.Reset();
+            lastControllerUpdateUtc = DateTime.UtcNow;
+            UpdateModeUI();
+        }
+
+        private void DisableClosedLoop(string message)
+        {
+            isClosedLoop = false;
+            levelController.Reset();
+            lastControllerUpdateUtc = DateTime.MinValue;
+            // User-requested mode change: return to uncorrected manual pose.
+            ApplyRequestedPose();
+            TxtLoopStatus.Text = message;
+            UpdateModeUI(false);
+        }
+
+        private void InhibitCommands(string reason)
+        {
+            isClosedLoop = false;
+            transmissionInhibited = true;
+            levelController.Reset();
+            lastControllerUpdateUtc = DateTime.MinValue;
+            TxtLoopStatus.Text = reason;
+            UpdateModeUI(false);
+            // Do not replace the last valid servo command with a new pose.
+            // Servos may continue holding their last command: this is not an E-stop.
+        }
+
+        private void UpdateModeUI(bool updateLabel = true)
+        {
+            BtnModeToggle.Content = isClosedLoop ? "Switch to Open Loop" : "Switch to Closed Loop";
+            TxtModeStatus.Text = isClosedLoop ? "Closed Loop: MPU roll/pitch correction" : "Open Loop: manual pose";
+            if (updateLabel) TxtLoopStatus.Text = isClosedLoop ? "Stabilizing ..." : "Open loop";
+        }
+
+        private void ControlTimer_Tick(object? sender, EventArgs e)
+        {
+            if (!isClosedLoop) return;
+            if (!connection.IsConnected || !FeedbackIsFresh())
+            {
+                InhibitCommands("Feedback timeout — commands halted; disconnect and inspect hardware.");
+                return;
+            }
+
+            DateTime now = DateTime.UtcNow;
+            double dt = lastControllerUpdateUtc == DateTime.MinValue ? 0.08
+                      : (now - lastControllerUpdateUtc).TotalSeconds;
+            lastControllerUpdateUtc = now;
+
+            double desiredRoll = SldRotX.Value;
+            double desiredPitch = SldRotY.Value;
+            var (rollCommand, pitchCommand) = levelController.Update(
+                desiredRoll, desiredPitch, feedbackRoll, feedbackPitch, dt, now);
+
+            rollCommand = Math.Clamp(rollCommand, -MaximumSafeRotationDegrees, MaximumSafeRotationDegrees);
+            pitchCommand = Math.Clamp(pitchCommand, -MaximumSafeRotationDegrees, MaximumSafeRotationDegrees);
+
+            ApplyPose(SldPosX.Value, SldPosY.Value, SldPosZ.Value,
+                      rollCommand, pitchCommand, SldRotZ.Value);
+
+            TxtLoopStatus.Text = levelController.IsStable ? "STABLE (roll/pitch)" : "CORRECTING (roll/pitch)";
+            TxtErrRoll.Text = $"Roll error: {levelController.RollError:+0.0;-0.0;0.0}°";
+            TxtErrPitch.Text = $"Pitch error: {levelController.PitchError:+0.0;-0.0;0.0}°";
+        }
+
+        private void ApplyPose(double x, double y, double z,
+                               double rollDeg, double pitchDeg, double yawDeg)
+        {
+            double degToRad = Math.PI / 180.0;
+            platform.ApplyTranslationAndRotation(x, y, z,
+                rollDeg * degToRad, pitchDeg * degToRad, yawDeg * degToRad);
+            UpdateUI();
+            Update3DVisualization();
+        }
+
+        private void ApplyRequestedPose() => ApplyPose(
+            SldPosX.Value, SldPosY.Value, SldPosZ.Value,
+            SldRotX.Value, SldRotY.Value, SldRotZ.Value);
 
         private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
@@ -190,12 +349,8 @@ namespace stewart_platform
                 targetValues[5] = SldRotZ.Value;
             }
 
-            double rx = SldRotX.Value * (Math.PI / 180.0);
-            double ry = SldRotY.Value * (Math.PI / 180.0);
-            double rz = SldRotZ.Value * (Math.PI / 180.0);
-            platform.ApplyTranslationAndRotation(SldPosX.Value, SldPosY.Value, SldPosZ.Value, rx, ry, rz);
-            UpdateUI();
-            Update3DVisualization();
+            // Closed-loop control timer owns the corrected pose while active.
+            if (!isClosedLoop) ApplyRequestedPose();
         }
 
         private void MovementTimer_Tick(object? sender, EventArgs e)
