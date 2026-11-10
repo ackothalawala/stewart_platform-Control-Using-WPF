@@ -3,94 +3,146 @@ using System;
 namespace stewart_platform.Control
 {
     /// <summary>
-    /// Small, bounded roll/pitch feedback trim for an IMU mounted on the moving plate.
-    /// It corrects the commanded pose (degrees); the existing inverse kinematics
-    /// still calculates the six servo angles. No yaw PID: MPU6050 yaw drifts.
+    /// Coarse roll/pitch feedback correction for a servo-driven Stewart platform.
+    /// Only WHOLE-DEGREE errors are used to decide whether to correct. The IK
+    /// and servo PWM calculations are intentionally kept at full precision.
+    ///
+    /// Example: measured +0.6 -> 0, measured -1.8 -> -1.
+    /// After truncation, +/-1 degree counts as acceptable (hold band).
+    /// This is truncation toward zero, NOT rounding to the nearest degree.
     /// </summary>
     public sealed class PlatformLevelController
     {
-        // Conservative starting values. Tune only after verifying sensor axis signs.
-        public double ProportionalGain { get; set; } = 0.35;
-        public double IntegralGain { get; set; } = 0.04;
+        // Set to -1 only if a verified small correction moves that axis the wrong way.
         public double RollCorrectionSign { get; set; } = 1.0;
         public double PitchCorrectionSign { get; set; } = 1.0;
-        public double DeadbandDegrees { get; set; } = 0.7;
-        public double MaxTrimDegrees { get; set; } = 4.0;
-        public double MaxTrimChangePerUpdateDegrees { get; set; } = 0.25;
 
-        private double rollIntegral;
-        private double pitchIntegral;
-        private double rollTrim;
-        private double pitchTrim;
-        private double filteredRoll;
-        private double filteredPitch;
-        private bool initialized;
-        private DateTime stableSince = DateTime.MinValue;
+        // These are whole-degree pose corrections, not servo-shaft increments.
+        public int MaxTrimDegrees { get; set; } = 4;
+        public int MinimumUpdateIntervalMilliseconds { get; set; } = 320;
+        public int RequiredConsistentUpdates { get; set; } = 3;
+        public int StabilityHoldMilliseconds { get; set; } = 600;
+
+        private int rollTrim;
+        private int pitchTrim;
+        private int previousRollError;
+        private int previousPitchError;
+        private int consecutiveRollErrors;
+        private int consecutivePitchErrors;
+        private DateTime lastCorrectionUtc = DateTime.MinValue;
+        private DateTime stableSinceUtc = DateTime.MinValue;
 
         public double RollError { get; private set; }
         public double PitchError { get; private set; }
         public bool IsStable { get; private set; }
-        public double FilteredRoll => filteredRoll;
-        public double FilteredPitch => filteredPitch;
+        public bool IsCorrectionLimited { get; private set; }
+
+        // Kept for compatibility with code that displays these properties.
+        public double FilteredRoll { get; private set; }
+        public double FilteredPitch { get; private set; }
 
         public void Reset()
         {
-            rollIntegral = pitchIntegral = rollTrim = pitchTrim = 0;
+            rollTrim = pitchTrim = 0;
+            previousRollError = previousPitchError = 0;
+            consecutiveRollErrors = consecutivePitchErrors = 0;
+            lastCorrectionUtc = stableSinceUtc = DateTime.MinValue;
             RollError = PitchError = 0;
-            initialized = false;
-            IsStable = false;
-            stableSince = DateTime.MinValue;
+            FilteredRoll = FilteredPitch = 0;
+            IsStable = IsCorrectionLimited = false;
         }
 
-        /// <summary>Returns the next bounded roll/pitch pose commands in degrees.</summary>
+        /// <summary>
+        /// Returns roll and pitch pose requests in whole degrees.
+        /// seconds is retained to avoid changing the existing WPF call signature.
+        /// </summary>
         public (double Roll, double Pitch) Update(
             double targetRoll, double targetPitch,
             double measuredRoll, double measuredPitch,
             double seconds, DateTime nowUtc)
         {
-            if (!double.IsFinite(measuredRoll) || !double.IsFinite(measuredPitch))
-                throw new ArgumentException("Invalid IMU feedback");
+            if (!double.IsFinite(measuredRoll) || !double.IsFinite(measuredPitch) ||
+                !double.IsFinite(targetRoll) || !double.IsFinite(targetPitch))
+                throw new ArgumentException("Invalid roll/pitch target or IMU feedback.");
 
-            seconds = Math.Clamp(seconds, 0.01, 0.20);
-            if (!initialized)
+            // IMPORTANT: ignore the fractional part entirely for feedback control.
+            int targetR = checked((int)Math.Truncate(targetRoll));
+            int targetP = checked((int)Math.Truncate(targetPitch));
+            int measuredR = checked((int)Math.Truncate(measuredRoll));
+            int measuredP = checked((int)Math.Truncate(measuredPitch));
+            FilteredRoll = measuredR;
+            FilteredPitch = measuredP;
+
+            int rawErrorR = targetR - measuredR;
+            int rawErrorP = targetP - measuredP;
+
+            // One-degree hold band: do not command corrections for -1, 0, +1.
+            // Only integer values from the IMU enter this decision.
+            int errorR = Math.Abs(rawErrorR) <= 1 ? 0 : rawErrorR;
+            int errorP = Math.Abs(rawErrorP) <= 1 ? 0 : rawErrorP;
+            RollError = errorR;
+            PitchError = errorP;
+
+            // Require several consecutive readings showing the same nonzero
+            // whole-degree error before allowing another discrete adjustment.
+            UpdateConsistency(errorR, ref previousRollError, ref consecutiveRollErrors);
+            UpdateConsistency(errorP, ref previousPitchError, ref consecutivePitchErrors);
+
+            if (lastCorrectionUtc == DateTime.MinValue ||
+                (nowUtc - lastCorrectionUtc).TotalMilliseconds >= MinimumUpdateIntervalMilliseconds)
             {
-                filteredRoll = measuredRoll;
-                filteredPitch = measuredPitch;
-                initialized = true;
+                bool changed = false;
+                if (errorR != 0 && consecutiveRollErrors >= RequiredConsistentUpdates)
+                {
+                    int next = Math.Clamp(rollTrim + Direction(RollCorrectionSign) * Math.Sign(errorR),
+                                          -MaxTrimDegrees, MaxTrimDegrees);
+                    changed |= next != rollTrim;
+                    rollTrim = next;
+                    consecutiveRollErrors = 0;
+                }
+                if (errorP != 0 && consecutivePitchErrors >= RequiredConsistentUpdates)
+                {
+                    int next = Math.Clamp(pitchTrim + Direction(PitchCorrectionSign) * Math.Sign(errorP),
+                                          -MaxTrimDegrees, MaxTrimDegrees);
+                    changed |= next != pitchTrim;
+                    pitchTrim = next;
+                    consecutivePitchErrors = 0;
+                }
+                if (changed) lastCorrectionUtc = nowUtc;
+            }
+
+            bool within = errorR == 0 && errorP == 0;
+            if (!within) stableSinceUtc = DateTime.MinValue;
+            else if (stableSinceUtc == DateTime.MinValue) stableSinceUtc = nowUtc;
+
+            IsStable = within &&
+                (nowUtc - stableSinceUtc).TotalMilliseconds >= StabilityHoldMilliseconds;
+            IsCorrectionLimited = !within &&
+                ((errorR != 0 && Math.Abs(rollTrim) == MaxTrimDegrees) ||
+                 (errorP != 0 && Math.Abs(pitchTrim) == MaxTrimDegrees));
+
+            // No fractional command changes in closed-loop roll/pitch.
+            // Leave the current trim in place when measured target is reached.
+            return (targetR + rollTrim, targetP + pitchTrim);
+        }
+
+        private static int Direction(double sign) => sign < 0 ? -1 : 1;
+
+        private static void UpdateConsistency(int error, ref int previous, ref int count)
+        {
+            if (error == 0)
+            {
+                count = 0;
+            }
+            else if (error == previous)
+            {
+                count = Math.Min(count + 1, 100);
             }
             else
             {
-                // Low-pass filter to suppress accelerometer vibration.
-                filteredRoll += 0.25 * (measuredRoll - filteredRoll);
-                filteredPitch += 0.25 * (measuredPitch - filteredPitch);
+                count = 1;
             }
-
-            RollError = targetRoll - filteredRoll;
-            PitchError = targetPitch - filteredPitch;
-
-            rollTrim = UpdateAxis(RollError, ref rollIntegral, rollTrim, RollCorrectionSign, seconds);
-            pitchTrim = UpdateAxis(PitchError, ref pitchIntegral, pitchTrim, PitchCorrectionSign, seconds);
-
-            bool within = Math.Abs(RollError) <= DeadbandDegrees &&
-                          Math.Abs(PitchError) <= DeadbandDegrees;
-            if (!within) stableSince = DateTime.MinValue;
-            else if (stableSince == DateTime.MinValue) stableSince = nowUtc;
-
-            IsStable = within && (nowUtc - stableSince).TotalMilliseconds >= 600;
-            return (targetRoll + rollTrim, targetPitch + pitchTrim);
-        }
-
-        private double UpdateAxis(double error, ref double integral, double previousTrim,
-                                  double direction, double seconds)
-        {
-            // Do not wind up while near the requested attitude.
-            if (Math.Abs(error) > DeadbandDegrees)
-                integral = Math.Clamp(integral + error * seconds, -20.0, 20.0);
-
-            double desired = direction * (ProportionalGain * error + IntegralGain * integral);
-            desired = Math.Clamp(desired, -MaxTrimDegrees, MaxTrimDegrees);
-            return Math.Clamp(desired, previousTrim - MaxTrimChangePerUpdateDegrees,
-                                        previousTrim + MaxTrimChangePerUpdateDegrees);
+            previous = error;
         }
     }
 }
