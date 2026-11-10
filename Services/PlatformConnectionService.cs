@@ -49,8 +49,7 @@ namespace stewart_platform.Services
             }
             else if (!isWifiMode && arduinoPort != null && arduinoPort.IsOpen)
             {
-                byte[] header = { 0x6A, 0x6A };
-                arduinoPort.Write(header, 0, 2);
+                // Match the working Avalonia USB sender: six values + newline.
                 arduinoPort.Write(dataStr + "\n");
             }
         }

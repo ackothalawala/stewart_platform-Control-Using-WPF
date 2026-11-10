@@ -18,24 +18,29 @@ namespace stewart_platform.Kinematics
         internal Vector3D Transform(Vector3D p, Vector3D translation, Vector3D rotation)
         {
             Vector3D h0 = new Vector3D(0, 0, initialHeight);
-            double rz = rotation.Z + homeYawOffsetRad;
+            // Avalonia bakes home yaw into body-frame geometry before pose rotation.
+            double offsetCos = Math.Cos(homeYawOffsetRad);
+            double offsetSin = Math.Sin(homeYawOffsetRad);
+            double px = offsetCos * p.X - offsetSin * p.Y;
+            double py = offsetSin * p.X + offsetCos * p.Y;
+            double pz = p.Z;
 
             double cx = Math.Cos(rotation.X); double sx = Math.Sin(rotation.X);
             double cy = Math.Cos(rotation.Y); double sy = Math.Sin(rotation.Y);
-            double cz = Math.Cos(rz); double sz = Math.Sin(rz);
+            double cz = Math.Cos(rotation.Z); double sz = Math.Sin(rotation.Z);
 
             // Same rotation matrix and operation order as the original StewartMath.cs.
-            double qx = (cz * cy) * p.X
-                      + (-sz * cx + cz * sy * sx) * p.Y
-                      + (sz * sx + cz * sy * cx) * p.Z;
+            double qx = (cz * cy) * px
+                      + (-sz * cx + cz * sy * sx) * py
+                      + (sz * sx + cz * sy * cx) * pz;
 
-            double qy = (sz * cy) * p.X
-                      + (cz * cx + sz * sy * sx) * p.Y
-                      + (-cz * sx + sz * sy * cx) * p.Z;
+            double qy = (sz * cy) * px
+                      + (cz * cx + sz * sy * sx) * py
+                      + (-cz * sx + sz * sy * cx) * pz;
 
-            double qz = (-sy) * p.X
-                      + (cy * sx) * p.Y
-                      + (cy * cx) * p.Z;
+            double qz = (-sy) * px
+                      + (cy * sx) * py
+                      + (cy * cx) * pz;
 
             return new Vector3D(qx, qy, qz) + translation + h0;
         }
