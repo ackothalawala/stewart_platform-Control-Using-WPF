@@ -36,6 +36,13 @@ namespace stewart_platform
         private bool isSending;
         private bool transmissionInhibited;
 
+        // Closed-loop is a one-time leveling procedure, not a permanent servo governor.
+        private enum LevelingPhase { OpenLoop, ReturningToZero, Leveling, ManualReady }
+        private LevelingPhase levelingPhase = LevelingPhase.OpenLoop;
+        private double heldRollTrim;
+        private double heldPitchTrim;
+
+
         public MainWindow()
         {
             InitializeComponent();
@@ -134,6 +141,9 @@ namespace stewart_platform
                 hasFeedback = false;
                 transmissionInhibited = false;
                 levelController.Reset();
+                levelingPhase = LevelingPhase.OpenLoop;
+                heldRollTrim = heldPitchTrim = 0;
+                UpdateModeUI();
                 sendTimer.Start();
                 BtnConnect.Content = "Disconnect";
 
@@ -154,6 +164,9 @@ namespace stewart_platform
         {
             sendTimer.Stop();
             isClosedLoop = false;
+            levelingPhase = LevelingPhase.OpenLoop;
+            heldRollTrim = heldPitchTrim = 0;
+            movementTimer.Stop();
             levelController.Reset();
             UpdateModeUI();
             connection.Disconnect();
@@ -212,14 +225,10 @@ namespace stewart_platform
                 feedbackPitch = pitch;
                 hasFeedback = true;
                 lastFeedbackUtc = DateTime.UtcNow;
-                /* TxtSensorRoll.Text = $"{roll:F1}°";
-                 TxtSensorPitch.Text = $"{pitch:F1}°";
-                 TxtSensorYaw.Text = $"{yaw:F1}°";
-                 TxtSensorTemp.Text = $"{temp:F1}°C";*/
-
                 TxtSensorRoll.Text = $"{Math.Truncate(roll):F0}°";
                 TxtSensorPitch.Text = $"{Math.Truncate(pitch):F0}°";
                 TxtSensorYaw.Text = $"{Math.Truncate(yaw):F0}°";
+                TxtSensorTemp.Text = $"{temp:F1}°C";
             }));
         }
 
@@ -230,66 +239,131 @@ namespace stewart_platform
         {
             if (isClosedLoop)
             {
-                DisableClosedLoop("Open Loop: slider positions control the servos.");
+                DisableClosedLoop("Open loop: manual pose control.");
                 return;
             }
+            if (!CanStartLeveling()) return;
+            isClosedLoop = true;
+            heldRollTrim = heldPitchTrim = 0;
+            BeginReturnToZero();
+        }
 
+        private bool CanStartLeveling()
+        {
             if (transmissionInhibited)
             {
-                MessageBox.Show("Control is inhibited due to a fault. Disconnect, inspect hardware, then reconnect.");
-                return;
+                MessageBox.Show("Commands inhibited. Disconnect, inspect hardware, then reconnect.");
+                return false;
             }
             if (!connection.IsConnected)
             {
-                MessageBox.Show("Connect your ESP32 first.");
-                return;
+                MessageBox.Show("Connect the ESP32 first.");
+                return false;
             }
             if (!FeedbackIsFresh() || Math.Abs(feedbackRoll) > 45 || Math.Abs(feedbackPitch) > 45)
             {
-                MessageBox.Show("Valid, recent MPU6050 roll/pitch feedback is required.");
-                return;
+                MessageBox.Show("Recent, valid MPU6050 roll/pitch feedback is required.");
+                return false;
             }
+            return true;
+        }
 
-            // Verify correct IMU attachment/orientation and servo response first.
-            isClosedLoop = true;
-            levelController.Reset();
-            lastControllerUpdateUtc = DateTime.UtcNow;
+        private void BeginReturnToZero()
+        {
+            // Keep the previous leveling trim during the trip back to the user's zero.
+            // This avoids an abrupt jump when Reset is clicked after manual operation.
+            movementTimer.Stop();
+            levelingPhase = LevelingPhase.ReturningToZero;
+            for (int i = 0; i < 6; i++) targetValues[i] = 0;
             UpdateModeUI();
+            movementTimer.Start();
+        }
+
+        private void BeginLeveling()
+        {
+            if (!isClosedLoop) return;
+            levelingPhase = LevelingPhase.Leveling;
+            // Reuse the last successful baseline to avoid jumping to an untrimmed pose.
+            levelController.ResetWithTrim((int)Math.Round(heldRollTrim),
+                                          (int)Math.Round(heldPitchTrim));
+            lastControllerUpdateUtc = DateTime.UtcNow;
+            ApplyRequestedPose();
+            UpdateModeUI();
+        }
+
+        private void CompleteLeveling(double finalRoll, double finalPitch)
+        {
+            heldRollTrim = finalRoll;
+            heldPitchTrim = finalPitch;
+            levelingPhase = LevelingPhase.ManualReady;
+            // Continue applying the held leveling offset to manual roll/pitch commands.
+            // Sensor feedback is now display-only until Reset is pressed.
+            ApplyRequestedPose();
+            UpdateModeUI();
+            TxtLoopStatus.Text = "STABLE — leveling complete. Manual control unlocked.";
         }
 
         private void DisableClosedLoop(string message)
         {
+            movementTimer.Stop();
             isClosedLoop = false;
+            levelingPhase = LevelingPhase.OpenLoop;
             levelController.Reset();
             lastControllerUpdateUtc = DateTime.MinValue;
-            // User-requested mode change: return to uncorrected manual pose.
+            heldRollTrim = heldPitchTrim = 0;
             ApplyRequestedPose();
+            UpdateModeUI();
             TxtLoopStatus.Text = message;
-            UpdateModeUI(false);
         }
 
         private void InhibitCommands(string reason)
         {
+            movementTimer.Stop();
             isClosedLoop = false;
+            levelingPhase = LevelingPhase.OpenLoop;
             transmissionInhibited = true;
             levelController.Reset();
             lastControllerUpdateUtc = DateTime.MinValue;
+            // Do not recalculate or send a new pose after a fault.
             TxtLoopStatus.Text = reason;
             UpdateModeUI(false);
-            // Do not replace the last valid servo command with a new pose.
-            // Servos may continue holding their last command: this is not an E-stop.
         }
 
         private void UpdateModeUI(bool updateLabel = true)
         {
             BtnModeToggle.Content = isClosedLoop ? "Switch to Open Loop" : "Switch to Closed Loop";
-            TxtModeStatus.Text = isClosedLoop ? "Closed Loop: MPU roll/pitch correction" : "Open Loop: manual pose";
-            if (updateLabel) TxtLoopStatus.Text = isClosedLoop ? "Stabilizing ..." : "Open loop";
+            TxtModeStatus.Text = levelingPhase switch
+            {
+                LevelingPhase.ReturningToZero => "Closed Loop: returning to zero",
+                LevelingPhase.Leveling => "Closed Loop: one-time leveling",
+                LevelingPhase.ManualReady => "Closed Loop: leveled; manual control",
+                _ => "Open Loop: manual pose"
+            };
+            bool locked = levelingPhase == LevelingPhase.ReturningToZero ||
+                          levelingPhase == LevelingPhase.Leveling;
+            PositionGroup.IsEnabled = !locked;
+            RotationGroup.IsEnabled = !locked;
+            StabilizingNotice.Visibility = locked ? Visibility.Visible : Visibility.Collapsed;
+            TxtStabilizingNotice.Text = levelingPhase == LevelingPhase.ReturningToZero
+                ? "Returning to zero. Please wait until leveling completes…"
+                : "Stabilizing platform. Please wait until stable…";
+            BtnReset.IsEnabled = !locked;
+            if (updateLabel)
+            {
+                TxtLoopStatus.Text = levelingPhase switch
+                {
+                    LevelingPhase.ReturningToZero => "Returning all axes to zero…",
+                    LevelingPhase.Leveling => "CORRECTING (roll/pitch)…",
+                    LevelingPhase.ManualReady => "STABLE — manual controls available",
+                    _ => "Open loop"
+                };
+            }
         }
 
         private void ControlTimer_Tick(object? sender, EventArgs e)
         {
-            if (!isClosedLoop) return;
+            // ManualReady deliberately does NOT run the PI / discrete feedback controller.
+            if (levelingPhase != LevelingPhase.Leveling) return;
             if (!connection.IsConnected || !FeedbackIsFresh())
             {
                 InhibitCommands("Feedback timeout — commands halted; disconnect and inspect hardware.");
@@ -301,20 +375,24 @@ namespace stewart_platform
                       : (now - lastControllerUpdateUtc).TotalSeconds;
             lastControllerUpdateUtc = now;
 
-            double desiredRoll = SldRotX.Value;
-            double desiredPitch = SldRotY.Value;
+            // Level only the home position (zero target); subsequent user movements
+            // are open-loop relative to the leveled baseline.
             var (rollCommand, pitchCommand) = levelController.Update(
-                desiredRoll, desiredPitch, feedbackRoll, feedbackPitch, dt, now);
-
+                0, 0, feedbackRoll, feedbackPitch, dt, now);
             rollCommand = Math.Clamp(rollCommand, -MaximumSafeRotationDegrees, MaximumSafeRotationDegrees);
             pitchCommand = Math.Clamp(pitchCommand, -MaximumSafeRotationDegrees, MaximumSafeRotationDegrees);
+            heldRollTrim = rollCommand;
+            heldPitchTrim = pitchCommand;
+            ApplyRequestedPose();
 
-            ApplyPose(SldPosX.Value, SldPosY.Value, SldPosZ.Value,
-                      rollCommand, pitchCommand, SldRotZ.Value);
-
-            TxtLoopStatus.Text = levelController.IsStable ? "STABLE (roll/pitch)" : "CORRECTING (roll/pitch)";
             TxtErrRoll.Text = $"Roll error: {levelController.RollError:+0.0;-0.0;0.0}°";
             TxtErrPitch.Text = $"Pitch error: {levelController.PitchError:+0.0;-0.0;0.0}°";
+            TxtLoopStatus.Text = levelController.IsCorrectionLimited
+                ? "Correction limit reached — inspect orientation or hardware."
+                : "CORRECTING (roll/pitch)…";
+
+            if (levelController.IsStable)
+                CompleteLeveling(rollCommand, pitchCommand);
         }
 
         private void ApplyPose(double x, double y, double z,
@@ -327,9 +405,14 @@ namespace stewart_platform
             Update3DVisualization();
         }
 
-        private void ApplyRequestedPose() => ApplyPose(
-            SldPosX.Value, SldPosY.Value, SldPosZ.Value,
-            SldRotX.Value, SldRotY.Value, SldRotZ.Value);
+        private void ApplyRequestedPose()
+        {
+            double rollOffset = isClosedLoop ? heldRollTrim : 0;
+            double pitchOffset = isClosedLoop ? heldPitchTrim : 0;
+            ApplyPose(SldPosX.Value, SldPosY.Value, SldPosZ.Value,
+                SldRotX.Value + rollOffset, SldRotY.Value + pitchOffset,
+                SldRotZ.Value);
+        }
 
         private void Slider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
@@ -354,7 +437,10 @@ namespace stewart_platform
             }
 
             // Closed-loop control timer owns the corrected pose while active.
-            if (!isClosedLoop) ApplyRequestedPose();
+            if (levelingPhase == LevelingPhase.OpenLoop ||
+                levelingPhase == LevelingPhase.ReturningToZero ||
+                levelingPhase == LevelingPhase.ManualReady)
+                ApplyRequestedPose();
         }
 
         private void MovementTimer_Tick(object? sender, EventArgs e)
@@ -369,7 +455,11 @@ namespace stewart_platform
             isInternalUpdate = false;
 
             if (doneX && doneY && doneZ && doneRx && doneRy && doneRz)
+            {
                 movementTimer.Stop();
+                if (levelingPhase == LevelingPhase.ReturningToZero)
+                    BeginLeveling();
+            }
         }
 
         private bool MoveAxisTowards(Slider sld, int targetIndex, double step)
@@ -381,6 +471,7 @@ namespace stewart_platform
 
         private void BtnSetPos_Click(object sender, RoutedEventArgs e)
         {
+            if (levelingPhase == LevelingPhase.Leveling || levelingPhase == LevelingPhase.ReturningToZero) return;
             string axis = ((Button)sender).Tag?.ToString() ?? "";
             try
             {
@@ -394,6 +485,7 @@ namespace stewart_platform
 
         private void BtnSetRot_Click(object sender, RoutedEventArgs e)
         {
+            if (levelingPhase == LevelingPhase.Leveling || levelingPhase == LevelingPhase.ReturningToZero) return;
             string axis = ((Button)sender).Tag?.ToString() ?? "";
             try
             {
@@ -407,8 +499,18 @@ namespace stewart_platform
 
         private void BtnReset_Click(object sender, RoutedEventArgs e)
         {
-            for (int i = 0; i < 6; i++) targetValues[i] = 0;
-            movementTimer.Start();
+            if (levelingPhase == LevelingPhase.Leveling ||
+                levelingPhase == LevelingPhase.ReturningToZero) return;
+            if (isClosedLoop)
+            {
+                if (!CanStartLeveling()) return;
+                BeginReturnToZero();
+            }
+            else
+            {
+                for (int i = 0; i < 6; i++) targetValues[i] = 0;
+                movementTimer.Start();
+            }
         }
 
         private void Update3DVisualization() => visualizer.Update(platform);

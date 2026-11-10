@@ -1,4 +1,4 @@
-﻿<Window x:Class="stewart_platform.MainWindow"
+<Window x:Class="stewart_platform.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:helix="http://helix-toolkit.org/wpf"
@@ -36,7 +36,7 @@
                     </StackPanel>
                 </GroupBox>
 
-                <GroupBox Header="Position (mm)" Margin="0,0,0,10" Padding="5">
+                <GroupBox x:Name="PositionGroup" Header="Position (mm)" Margin="0,0,0,10" Padding="5">
                     <StackPanel>
                         <Grid Margin="0,2">
                             <Grid.ColumnDefinitions>
@@ -76,7 +76,7 @@
                     </StackPanel>
                 </GroupBox>
 
-                <GroupBox Header="Rotation (Deg)" Margin="0,0,0,10" Padding="5">
+                <GroupBox x:Name="RotationGroup" Header="Rotation (Deg)" Margin="0,0,0,10" Padding="5">
                     <StackPanel>
                         <Grid Margin="0,2">
                             <Grid.ColumnDefinitions>
@@ -176,6 +176,18 @@
             <helix:TubeVisual3D x:Name="VisRod4" Diameter="1.5" Fill="White"/>
             <helix:TubeVisual3D x:Name="VisRod5" Diameter="1.5" Fill="White"/>
         </helix:HelixViewport3D>
+
+        <!-- Non-blocking notice: button/text input controls are disabled during leveling. -->
+        <Border x:Name="StabilizingNotice" Grid.ColumnSpan="2" HorizontalAlignment="Center"
+                VerticalAlignment="Top" Width="460" Margin="0,16,0,0" Padding="16"
+                Background="#FFF3CD" BorderBrush="#D39E00" BorderThickness="2"
+                CornerRadius="8" Visibility="Collapsed" IsHitTestVisible="False" Panel.ZIndex="5">
+            <StackPanel>
+                <TextBlock Text="Please wait" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="TxtStabilizingNotice" Text="Stabilizing platform…"
+                           TextAlignment="Center" TextWrapping="Wrap" Margin="0,5,0,0"/>
+            </StackPanel>
+        </Border>
 
         <Grid x:Name="ModalOverlay" Background="#99000000" Visibility="Collapsed" Grid.ColumnSpan="2">
             <Border Background="White" Width="400" Height="380" CornerRadius="8" VerticalAlignment="Center" HorizontalAlignment="Center" Padding="25">

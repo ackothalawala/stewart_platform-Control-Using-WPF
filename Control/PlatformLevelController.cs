@@ -41,9 +41,13 @@ namespace stewart_platform.Control
         public double FilteredRoll { get; private set; }
         public double FilteredPitch { get; private set; }
 
-        public void Reset()
+        public void Reset() => ResetWithTrim(0, 0);
+
+        // Begin a fresh leveling pass without dropping the previous calibrated offset.
+        public void ResetWithTrim(int initialRollTrim, int initialPitchTrim)
         {
-            rollTrim = pitchTrim = 0;
+            rollTrim = Math.Clamp(initialRollTrim, -MaxTrimDegrees, MaxTrimDegrees);
+            pitchTrim = Math.Clamp(initialPitchTrim, -MaxTrimDegrees, MaxTrimDegrees);
             previousRollError = previousPitchError = 0;
             consecutiveRollErrors = consecutivePitchErrors = 0;
             lastCorrectionUtc = stableSinceUtc = DateTime.MinValue;
