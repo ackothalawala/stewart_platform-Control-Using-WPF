@@ -212,10 +212,14 @@ namespace stewart_platform
                 feedbackPitch = pitch;
                 hasFeedback = true;
                 lastFeedbackUtc = DateTime.UtcNow;
-                TxtSensorRoll.Text = $"{roll:F1}°";
-                TxtSensorPitch.Text = $"{pitch:F1}°";
-                TxtSensorYaw.Text = $"{yaw:F1}°";
-                TxtSensorTemp.Text = $"{temp:F1}°C";
+                /* TxtSensorRoll.Text = $"{roll:F1}°";
+                 TxtSensorPitch.Text = $"{pitch:F1}°";
+                 TxtSensorYaw.Text = $"{yaw:F1}°";
+                 TxtSensorTemp.Text = $"{temp:F1}°C";*/
+
+                TxtSensorRoll.Text = $"{Math.Truncate(roll):F0}°";
+                TxtSensorPitch.Text = $"{Math.Truncate(pitch):F0}°";
+                TxtSensorYaw.Text = $"{Math.Truncate(yaw):F0}°";
             }));
         }
 
